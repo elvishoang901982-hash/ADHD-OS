@@ -1,950 +1,1474 @@
-
 /**
- * ADHD OS — MVP v3
- *
- * Core change from v2:
- *   AI Coach is NOT a chatbox.
- *   It's a 3-mode guided decision system:
- *     1. Morning Alignment  — chốt việc hôm nay
- *     2. Unstuck Flow       — gỡ rối từng bước
- *     3. Win Reflection     — ghi lại win
- *
- * Data: localStorage (Supabase-ready — see // SUPABASE markers)
- * AI:   Mock engine (set MOCK_AI=false + add API key to go live)
+ * ADHD OS — v4
+ * 
+ * 5 màn hình:
+ *   1. REFLECT  — Phản tư sâu 3 vòng → Core Identity
+ *   2. COMPASS  — North Star → 90 ngày → Tuần này
+ *   3. TODAY    — Brain dump → AI lọc → 3 bước nhỏ
+ *   4. COACH    — 3 tình huống bị kẹt cụ thể
+ *   5. EVIDENCE — Nhật ký bằng chứng tiến bộ
+ * 
+ * AI: Claude API (claude-sonnet-4-20250514)
+ * Data: localStorage (Supabase-ready)
+ * 
+ * THUẬT NGỮ:
+ *   Brain dump    = Đổ hết suy nghĩ ra không lọc
+ *   Executive Function = Khả năng lên kế hoạch & bắt đầu hành động
+ *   Core Identity = Câu mô tả bạn là ai ở cốt lõi
+ *   North Star    = Tầm nhìn dài hạn định hướng mọi quyết định
+ *   Sprint        = Giai đoạn tập trung ngắn có mục tiêu rõ
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-/* ── TOKENS ──────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   DESIGN TOKENS — Warm dark, ink & amber
+══════════════════════════════════════════════════════════ */
 const C = {
-  bg:       "#0C0A08",
-  surface:  "#131008",
-  card:     "#1A1610",
-  border:   "#2A2418",
-  borderHi: "#3A3020",
-  amber:    "#D4943A",
-  amberLo:  "#6B4A18",
-  amberHi:  "#F0B060",
-  text:     "#EDE5D8",
-  mid:      "#8A7E70",
-  dim:      "#4A4030",
-  green:    "#5AAB78",
-  greenLo:  "#0E2018",
-  blue:     "#5A8FBB",
-  red:      "#BB5050",
+  bg:       "#0A0906",
+  surface:  "#111009",
+  card:     "#181510",
+  cardHi:   "#201C14",
+  border:   "#282010",
+  borderHi: "#382C18",
+  amber:    "#C8863A",
+  amberLo:  "#5A3A10",
+  amberHi:  "#E8A850",
+  amberGlow:"#C8863A22",
+  text:     "#EDE5D4",
+  textMid:  "#8A7A60",
+  textDim:  "#48402A",
+  green:    "#4A9660",
+  greenLo:  "#0A180E",
+  greenHi:  "#6ABB80",
+  blue:     "#4A7AAA",
+  blueLo:   "#0A1420",
+  red:      "#AA4A4A",
+  redLo:    "#1A0A0A",
 };
 
-/* ── LOCAL STORAGE ───────────────────────────────────────── */
-// SUPABASE: replace all LS calls with supabase.from(...).select/upsert
+/* ══════════════════════════════════════════════════════════
+   LOCAL STORAGE — Supabase-ready
+══════════════════════════════════════════════════════════ */
+// SUPABASE: thay thế bằng supabase.from('table').select/upsert
 const LS = {
-  get: (k, d = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set: (k, v)        => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  get: (k, d = null) => {
+    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }
+    catch { return d; }
+  },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del: (k)    => { try { localStorage.removeItem(k); } catch {} },
 };
 
-/* ── MOCK AI ─────────────────────────────────────────────── */
-const MOCK_AI = true;
-
-// Simulates Claude API call
-async function callAI(systemPrompt, userMessage) {
-  if (MOCK_AI) {
-    await new Promise(r => setTimeout(r, 900 + Math.random() * 600));
-    return mockAIResponse(systemPrompt, userMessage);
+/* ══════════════════════════════════════════════════════════
+   CLAUDE API
+══════════════════════════════════════════════════════════ */
+async function askClaude(systemPrompt, messages, apiKey, maxTokens = 600) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err?.error?.message || "Lỗi kết nối API");
   }
-  // REAL API: replace with your Anthropic/OpenAI/Gemini call
-  // const res = await fetch("https://api.anthropic.com/v1/messages", {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json", "x-api-key": API_KEY, "anthropic-version": "2023-06-01" },
-  //   body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 400,
-  //     system: systemPrompt, messages: [{ role: "user", content: userMessage }] })
-  // });
-  // const data = await res.json();
-  // return data.content[0].text;
+  const data = await res.json();
+  return data.content.map(b => b.text || "").join("").trim();
 }
 
-function mockAIResponse(systemPrompt, userMessage) {
-  const msg = userMessage.toLowerCase();
+// System prompt cốt lõi — inject profile vào mọi lần gọi AI
+function buildSystemPrompt(profile) {
+  const p = profile || {};
+  return `Bạn là AI Coach chuyên biệt cho người ADHD (Rối loạn tăng động giảm chú ý — Attention Deficit Hyperactivity Disorder).
 
-  // Morning alignment — suggest task
-  if (systemPrompt.includes("MORNING") || systemPrompt.includes("morning")) {
-    if (msg.includes("không biết") || msg.includes("chua biet") || msg.length < 15) {
-      return "Dựa vào mục tiêu 90 ngày của bạn, hôm nay nên tập trung vào:\n→ Một bước nhỏ nhất đưa bạn gần hơn mục tiêu đó.\n\nViệc đó là gì — dù nhỏ?";
-    }
-    return `Được. Chốt lại:\n\n→ "${userMessage}"\n\nĐây là việc duy nhất quan trọng hôm nay. Làm xong việc này là một ngày thành công.`;
-  }
+HIỂU VỀ NÃO ADHD:
+- Không phải lười biếng. Đây là vấn đề về Executive Function (khả năng khởi động & điều hướng hành động).
+- Não ADHD cần: rõ ràng tuyệt đối, bước nhỏ không thể từ chối, và bằng chứng tiến bộ liên tục.
+- Tránh: áp lực, phán xét, câu trả lời dài dòng, nhiều lựa chọn cùng lúc.
 
-  // Unstuck — generate next action
-  if (systemPrompt.includes("UNSTUCK")) {
-    const lines = userMessage.split("\n").filter(Boolean);
-    const stuck = lines[0] || userMessage;
-    const block = lines[1] || "";
-    const small = lines[2] || "";
+THÔNG TIN VỀ NGƯỜI DÙNG:
+- Tên: ${p.name || "chưa có"}
+- Core Identity (Bản sắc cốt lõi): ${p.coreIdentity || "chưa xác định"}
+- North Star (Tầm nhìn dài hạn): ${p.northStar || "chưa xác định"}
+- Mục tiêu 90 ngày: ${p.goal90 || "chưa xác định"}
+- Điểm yếu chính: ${(p.struggles || []).join(", ") || "chưa biết"}
 
-    if (small && small.length > 5) {
-      return `Bước tiếp theo:\n\n→ ${small}\n\nChỉ làm bước này. Không cần hoàn hảo. Set timer 10 phút và bắt đầu ngay.`;
-    }
-    return `Bạn đang bị kẹt vì "${block || stuck}".\n\nBước nhỏ nhất có thể làm ngay:\n→ Dành 5 phút viết ra mọi thứ đang trong đầu. Sau đó chọn 1.`;
-  }
-
-  // Ikigai synthesis
-  if (systemPrompt.includes("IKIGAI")) {
-    return "IKIGAI_SYNTHESIS";
-  }
-
-  return `Được rồi. Chốt lại 1 việc tiếp theo:\n→ ${userMessage.substring(0, 60)}...\n\nLàm ngay. Không cần hoàn hảo.`;
+QUY TẮC TRẢ LỜI:
+1. Tối đa 120 từ — não ADHD không đọc dài
+2. Luôn kết thúc bằng 1 hành động CỰC KỲ cụ thể
+3. Không hỏi nhiều hơn 1 câu một lúc
+4. Dùng tiếng Việt, giải thích thuật ngữ tiếng Anh khi cần
+5. Giọng: ấm áp, thực tế, không thuyết giảng
+6. Khi chia nhỏ việc: mỗi bước < 15 phút, bắt đầu bằng động từ cụ thể`;
 }
 
-/* ── IKIGAI SYNTHESIS ────────────────────────────────────── */
-function buildIkigaiSynthesis(name, answers) {
-  const [passion, topic, help, useful, direction, lifeVision, stopThis] = answers;
-  return {
-    hypothesis: `${name} có năng lực tự nhiên với "${topic || passion}" và mọi người tin tưởng bạn vì "${help}". Hướng tạo ra giá trị phù hợp nhất: "${direction}".`,
-    northStar:  `${lifeVision || direction} — sống có chủ đích, làm việc có ý nghĩa, có tự do thời gian.`,
-    focus90:    `Trong 90 ngày tới: xây nền tảng vững cho "${direction}" bằng cách tập trung vào "${help}".`,
-    stopDoing:  stopThis || "Những việc không phục vụ North Star của bạn.",
-  };
-}
-
-/* ── STYLES ──────────────────────────────────────────────── */
-const G = () => (
-  <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;1,400&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body, #root { height: 100%; background: ${C.bg}; overflow: hidden; }
-    textarea, input { font-family: 'DM Sans', sans-serif; outline: none; }
-    textarea { resize: none; }
-    ::-webkit-scrollbar { width: 3px; }
-    ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }
-    @keyframes up    { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
-    @keyframes in    { from { opacity:0; } to { opacity:1; } }
-    @keyframes pop   { 0%{transform:scale(0)} 60%{transform:scale(1.3)} 100%{transform:scale(1)} }
-    @keyframes dot   { 0%,100%{opacity:.25;transform:scale(.75)} 50%{opacity:1;transform:scale(1)} }
-    .up  { animation: up  .4s cubic-bezier(.16,1,.3,1) both; }
-    .in  { animation: in  .35s ease both; }
-    .d1  { animation-delay: .07s; }
-    .d2  { animation-delay: .14s; }
-    .d3  { animation-delay: .21s; }
-    .d4  { animation-delay: .28s; }
-    button { cursor: pointer; border: none; font-family: 'DM Sans', sans-serif; transition: all .15s; }
-    button:active { transform: scale(.96); }
-  `}</style>
-);
-
-/* ── PRIMITIVES ──────────────────────────────────────────── */
-const mono = (s = {}) => ({ fontFamily: "'DM Mono',monospace", fontSize: "10px", letterSpacing: "2px", textTransform: "uppercase", color: C.dim, ...s });
-const serif = (s = {}) => ({ fontFamily: "'Lora',serif", ...s });
-
-function Lbl({ children, style }) { return <div style={{ ...mono(), ...style }}>{children}</div>; }
-
-function Card({ children, style, className }) {
-  return <div className={className} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "16px", padding: "20px", ...style }}>{children}</div>;
-}
-
-function Btn({ children, onClick, v = "primary", full, style, disabled }) {
-  const vars = {
-    primary: { background: `linear-gradient(135deg,${C.amber},${C.amberLo})`, color: "#0C0A08" },
-    ghost:   { background: "transparent", border: `1.5px solid ${C.border}`,   color: C.mid      },
-    green:   { background: C.greenLo,     border: `1.5px solid ${C.green}44`,  color: C.green    },
-  };
+/* ══════════════════════════════════════════════════════════
+   GLOBAL STYLES
+══════════════════════════════════════════════════════════ */
+function GS() {
   return (
-    <button onClick={!disabled ? onClick : undefined}
-      style={{ padding: "13px 20px", borderRadius: "12px", fontSize: "15px", fontWeight: 600,
-        opacity: disabled ? 0.4 : 1, width: full ? "100%" : "auto", ...vars[v], ...style }}>
-      {children}
-    </button>
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,700;1,400&family=JetBrains+Mono:wght@400;500&family=Nunito:wght@300;400;500;600;700&display=swap');
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body, #root { height: 100%; background: ${C.bg}; color: ${C.text}; }
+      textarea, input { font-family: 'Nunito', sans-serif; }
+      textarea { resize: none; }
+      ::-webkit-scrollbar { width: 2px; }
+      ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 1px; }
+
+      @keyframes fadeUp   { from { opacity:0; transform:translateY(16px) } to { opacity:1; transform:translateY(0) } }
+      @keyframes fadeIn   { from { opacity:0 } to { opacity:1 } }
+      @keyframes scaleIn  { from { opacity:0; transform:scale(.94) } to { opacity:1; transform:scale(1) } }
+      @keyframes pulse    { 0%,100%{ opacity:.2; transform:scale(.7) } 50%{ opacity:1; transform:scale(1) } }
+      @keyframes shimmer  { 0%{ background-position:200% 0 } 100%{ background-position:-200% 0 } }
+      @keyframes glow     { 0%,100%{ box-shadow:0 0 20px ${C.amberGlow} } 50%{ box-shadow:0 0 40px ${C.amberGlow} } }
+      @keyframes checkPop { 0%{transform:scale(0)} 60%{transform:scale(1.4)} 100%{transform:scale(1)} }
+      @keyframes slideIn  { from{transform:translateX(20px);opacity:0} to{transform:translateX(0);opacity:1} }
+
+      .fu  { animation: fadeUp  .5s cubic-bezier(.16,1,.3,1) both; }
+      .fi  { animation: fadeIn  .4s ease both; }
+      .si  { animation: scaleIn .4s cubic-bezier(.16,1,.3,1) both; }
+      .d1  { animation-delay: .06s; }
+      .d2  { animation-delay: .12s; }
+      .d3  { animation-delay: .18s; }
+      .d4  { animation-delay: .24s; }
+      .d5  { animation-delay: .30s; }
+
+      button { cursor: pointer; border: none; font-family: 'Nunito', sans-serif; transition: all .18s ease; }
+      button:active { transform: scale(.95) !important; }
+      button:disabled { opacity: .4; cursor: default; }
+      textarea:focus, input:focus { outline: none; border-color: ${C.amberLo} !important; }
+
+      .loading-dots span {
+        display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+        background: ${C.amber}; margin: 0 3px;
+        animation: pulse 1.4s ease infinite;
+      }
+      .loading-dots span:nth-child(2) { animation-delay: .2s; }
+      .loading-dots span:nth-child(3) { animation-delay: .4s; }
+    `}</style>
   );
 }
 
-function Dots({ n, cur }) {
+/* ══════════════════════════════════════════════════════════
+   PRIMITIVES
+══════════════════════════════════════════════════════════ */
+const mono = { fontFamily: "'JetBrains Mono', monospace" };
+const serif = { fontFamily: "'Playfair Display', serif" };
+
+function Tag({ children, color = C.amber, style = {} }) {
   return (
-    <div style={{ display: "flex", gap: "6px", justifyContent: "center", marginBottom: "28px" }}>
-      {Array.from({ length: n }).map((_, i) => (
-        <div key={i} style={{ width: i === cur ? "18px" : "6px", height: "6px", borderRadius: "3px",
-          background: i <= cur ? C.amber : C.border, opacity: i < cur ? .5 : 1, transition: "all .3s" }} />
+    <span style={{
+      ...mono, fontSize: "10px", letterSpacing: "2px", textTransform: "uppercase",
+      color, ...style
+    }}>{children}</span>
+  );
+}
+
+function Card({ children, style = {}, className = "", glow = false }) {
+  return (
+    <div className={className} style={{
+      background: C.card, border: `1px solid ${C.border}`,
+      borderRadius: "18px", padding: "20px",
+      ...(glow ? { animation: "glow 3s ease infinite", border: `1px solid ${C.amberLo}` } : {}),
+      ...style,
+    }}>{children}</div>
+  );
+}
+
+function Btn({ children, onClick, v = "primary", full = false, style = {}, disabled = false, size = "md" }) {
+  const sizes = { sm: "10px 16px", md: "13px 22px", lg: "16px 28px" };
+  const fonts = { sm: "13px", md: "15px", lg: "17px" };
+  const variants = {
+    primary: { background: `linear-gradient(135deg, ${C.amber}, ${C.amberLo})`, color: "#0A0906", fontWeight: 700 },
+    ghost:   { background: "transparent", border: `1.5px solid ${C.border}`, color: C.textMid },
+    green:   { background: C.greenLo, border: `1.5px solid ${C.green}44`, color: C.greenHi, fontWeight: 600 },
+    red:     { background: C.redLo, border: `1.5px solid ${C.red}44`, color: C.red },
+    amber:   { background: C.amberGlow, border: `1.5px solid ${C.amberLo}`, color: C.amberHi, fontWeight: 600 },
+  };
+  return (
+    <button disabled={disabled} onClick={disabled ? undefined : onClick} style={{
+      padding: sizes[size], borderRadius: "12px", fontSize: fonts[size],
+      width: full ? "100%" : "auto", ...variants[v], ...style,
+    }}>{children}</button>
+  );
+}
+
+function Divider({ color = C.border, margin = "20px 0" }) {
+  return <div style={{ height: "1px", background: color, margin }} />;
+}
+
+function Sp({ n = 1 }) {
+  return <div style={{ height: `${n * 12}px` }} />;
+}
+
+function Loading({ text = "Đang phân tích..." }) {
+  return (
+    <div style={{ textAlign: "center", padding: "40px 20px" }}>
+      <div className="loading-dots" style={{ marginBottom: "16px" }}>
+        <span /><span /><span />
+      </div>
+      <p style={{ color: C.textMid, fontSize: "14px" }}>{text}</p>
+    </div>
+  );
+}
+
+function ProgressBar({ value, max, color = C.amber }) {
+  return (
+    <div style={{ background: C.border, borderRadius: "4px", height: "4px", overflow: "hidden" }}>
+      <div style={{
+        height: "100%", width: `${(value / max) * 100}%`,
+        background: color, borderRadius: "4px", transition: "width .5s ease",
+      }} />
+    </div>
+  );
+}
+
+function StepDots({ total, current }) {
+  return (
+    <div style={{ display: "flex", gap: "6px", justifyContent: "center", marginBottom: "32px" }}>
+      {Array.from({ length: total }).map((_, i) => (
+        <div key={i} style={{
+          height: "5px", borderRadius: "3px", transition: "all .35s ease",
+          width: i === current ? "24px" : "5px",
+          background: i <= current ? C.amber : C.border,
+          opacity: i < current ? 0.4 : 1,
+        }} />
       ))}
     </div>
   );
 }
 
-function Thinking() {
+/* ══════════════════════════════════════════════════════════
+   API KEY SCREEN
+══════════════════════════════════════════════════════════ */
+function ApiKeyScreen({ onSave }) {
+  const [key, setKey] = useState("");
+  const [err, setErr] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  const test = async () => {
+    if (!key.trim().startsWith("sk-ant-")) {
+      return setErr("API key không đúng định dạng — phải bắt đầu bằng sk-ant-");
+    }
+    setTesting(true); setErr("");
+    try {
+      await askClaude("Trả lời ngắn gọn bằng tiếng Việt.", [{ role: "user", content: "Xin chào" }], key.trim(), 50);
+      LS.set("adhd_api_key", key.trim());
+      onSave(key.trim());
+    } catch (e) {
+      setErr("API key không hợp lệ: " + e.message);
+    }
+    setTesting(false);
+  };
+
   return (
-    <div style={{ display: "flex", gap: "7px", justifyContent: "center", padding: "28px 0" }}>
-      {[0, 1, 2].map(i => <div key={i} style={{ width: "8px", height: "8px", borderRadius: "50%",
-        background: C.amber, animation: `dot 1.3s ease ${i * .22}s infinite` }} />)}
+    <div style={{ minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+      <div className="fu" style={{ maxWidth: "380px", width: "100%", textAlign: "center" }}>
+        <div style={{ fontSize: "44px", marginBottom: "20px" }}>🔑</div>
+        <h2 style={{ ...serif, color: C.text, fontSize: "26px", marginBottom: "10px" }}>Kết nối AI</h2>
+        <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.75, marginBottom: "28px" }}>
+          ADHD OS dùng <strong style={{ color: C.amber }}>Claude AI</strong> — trí tuệ nhân tạo của Anthropic —
+          để coach bạn thật sự, không phải giả lập.
+        </p>
+
+        <Card style={{ textAlign: "left", marginBottom: "20px" }}>
+          <Tag style={{ marginBottom: "10px", display: "block" }}>Lấy API Key</Tag>
+          <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7, marginBottom: "12px" }}>
+            1. Vào <span style={{ color: C.amberHi }}>console.anthropic.com</span><br />
+            2. Đăng ký / đăng nhập<br />
+            3. Vào <em>API Keys</em> → <em>Create Key</em><br />
+            4. Copy key và paste vào đây
+          </p>
+          <p style={{ color: C.textDim, fontSize: "12px" }}>
+            Chi phí ước tính: ~$0.50–$2 / tháng cho 1 người dùng
+          </p>
+        </Card>
+
+        <input
+          value={key} onChange={e => setKey(e.target.value)}
+          placeholder="sk-ant-api03-..."
+          type="password"
+          style={{
+            width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+            borderRadius: "12px", padding: "13px 16px", color: C.text, fontSize: "14px",
+            marginBottom: "12px", letterSpacing: "0.5px",
+          }}
+        />
+
+        {err && <p style={{ color: C.red, fontSize: "13px", marginBottom: "12px" }}>{err}</p>}
+
+        <Btn full onClick={test} disabled={!key.trim() || testing} size="lg">
+          {testing ? "Đang kiểm tra..." : "Kết nối & bắt đầu →"}
+        </Btn>
+      </div>
     </div>
   );
 }
 
-function Divider() { return <div style={{ height: "1px", background: C.border, margin: "16px 0" }} />; }
-
 /* ══════════════════════════════════════════════════════════
-   ONBOARDING  (7 Ikigai questions → AI synthesis)
+   SCREEN 1 — REFLECT (Phản tư sâu 3 vòng)
 ══════════════════════════════════════════════════════════ */
-const IQ = [
-  { q: "Việc gì làm bạn quên mất thời gian?",                   ph: "Bất kỳ thứ gì — không cần hợp lý..." },
-  { q: "Bạn hay tìm hiểu, nói về chủ đề gì nhất?",             ph: "Chủ đề bạn đọc, xem, học mà không ai bắt..." },
-  { q: "Mọi người hay nhờ bạn giúp việc gì?",                   ph: "Trong công việc lẫn cuộc sống..." },
-  { q: "Việc gì khiến bạn cảm thấy có ích?",                    ph: "Khi nào bạn thấy mình đang đóng góp thật sự..." },
-  { q: "Nếu 3 năm tới chỉ kiếm tiền từ 1 hướng — bạn chọn gì?", ph: "Hướng nào bạn thấy khả thi nhất..." },
-  { q: "Cuộc sống lý tưởng của bạn sau 1 năm?",                 ph: "Một ngày bình thường trong cuộc sống đó..." },
-  { q: "Điều gì bạn không muốn tiếp tục lặp lại nữa?",         ph: "Thói quen, môi trường, kiểu công việc..." },
+const REFLECT_ROUNDS = [
+  {
+    id: "past",
+    title: "Quá khứ",
+    icon: "◎",
+    color: C.blue,
+    intro: "Nhìn lại để hiểu bạn là ai thật sự — không phải bạn muốn người khác thấy gì.",
+    questions: [
+      { q: "Khi nào trong cuộc sống bạn cảm thấy 'mình nhất' — tràn đầy năng lượng và đúng chỗ?", ph: "Có thể là một khoảnh khắc nhỏ, một dự án, một ngày..." },
+      { q: "Điều gì bạn đã làm được mà chính bạn cũng bất ngờ về bản thân?", ph: "Dù nhỏ cũng kể..." },
+    ]
+  },
+  {
+    id: "present",
+    title: "Hiện tại",
+    icon: "◉",
+    color: C.amber,
+    intro: "Não ADHD thường chạy ở 'chế độ nền' — nhiều thứ đang chiếm không gian mà bạn chưa nhận ra.",
+    questions: [
+      { q: "Điều gì đang chiếm não bạn nhiều nhất lúc này — kể cả những thứ bạn cố không nghĩ đến?", ph: "Đổ hết ra — không cần logic, không cần thứ tự..." },
+      { q: "Nếu giải quyết được 1 thứ trong danh sách đó, cuộc sống sẽ nhẹ hơn bao nhiêu?", ph: "Thứ nào nặng nhất?..." },
+    ]
+  },
+  {
+    id: "future",
+    title: "Tương lai",
+    icon: "◈",
+    color: C.green,
+    intro: "Không hỏi mục tiêu. Hỏi ước mơ — thứ não ADHD hay bị vùi lấp bởi lo lắng hàng ngày.",
+    questions: [
+      { q: "Nếu không sợ thất bại, không lo người khác nghĩ gì — bạn sẽ dành thời gian cho điều gì?", ph: "Thứ gì khiến bạn hứng khởi nhất khi tưởng tượng?..." },
+      { q: "10 năm nữa, bạn muốn người thân nói gì về bạn?", ph: "Không phải về thành tích — về con người bạn là..." },
+    ]
+  }
 ];
 
-function Onboarding({ onDone }) {
-  const [phase,  setPhase]  = useState("welcome");
-  const [step,   setStep]   = useState(0);
-  const [name,   setName]   = useState("");
-  const [ans,    setAns]    = useState(Array(7).fill(""));
-  const [synth,  setSynth]  = useState(null);
-  const [busy,   setBusy]   = useState(false);
+function ReflectScreen({ profile, apiKey, onComplete }) {
+  const [phase, setPhase] = useState("intro"); // intro | round | thinking | result
+  const [roundIdx, setRoundIdx] = useState(0);
+  const [qIdx, setQIdx] = useState(0);
+  const [answers, setAnswers] = useState({ past: [], present: [], future: [] });
+  const [input, setInput] = useState("");
+  const [name, setName] = useState(profile?.name || "");
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const taRef = useRef();
 
-  useEffect(() => { if (phase === "questions") taRef.current?.focus(); }, [step, phase]);
+  const round = REFLECT_ROUNDS[roundIdx];
+  const totalQ = REFLECT_ROUNDS.reduce((s, r) => s + r.questions.length, 0);
+  const doneQ = REFLECT_ROUNDS.slice(0, roundIdx).reduce((s, r) => s + r.questions.length, 0) + qIdx;
 
-  const setA = v => { const a = [...ans]; a[step] = v; setAns(a); };
+  useEffect(() => { if (phase === "round") taRef.current?.focus(); }, [phase, roundIdx, qIdx]);
 
-  const next = async () => {
-    if (step < 6) return setStep(s => s + 1);
-    setBusy(true); setPhase("thinking");
-    await new Promise(r => setTimeout(r, 2000));
-    const s = buildIkigaiSynthesis(name, ans);
-    // SUPABASE: await supabase.from('profiles').insert({ name, answers: ans, synthesis: s })
-    setSynth(s); setBusy(false); setPhase("result");
+  const nextQuestion = () => {
+    const key = round.id;
+    const updated = { ...answers, [key]: [...(answers[key] || []), input] };
+    setAnswers(updated);
+    setInput("");
+
+    if (qIdx < round.questions.length - 1) {
+      setQIdx(i => i + 1);
+    } else if (roundIdx < REFLECT_ROUNDS.length - 1) {
+      setRoundIdx(i => i + 1);
+      setQIdx(0);
+    } else {
+      synthesize(updated);
+    }
+  };
+
+  const synthesize = async (allAnswers) => {
+    setLoading(true); setPhase("thinking"); setError("");
+    try {
+      const sys = `Bạn là AI Coach chuyên về ADHD. Phân tích câu trả lời phản tư để tổng hợp Core Identity (Bản sắc cốt lõi) của người dùng.
+
+Trả lời CHÍNH XÁC theo format JSON sau, không thêm gì khác:
+{
+  "coreIdentity": "1 câu duy nhất mô tả họ là ai ở cốt lõi",
+  "superpower": "Điểm mạnh ẩn của họ (1 câu)",
+  "pattern": "Pattern (khuôn mẫu) tích cực lặp đi lặp lại trong câu trả lời",
+  "northStarHint": "Gợi ý về North Star dựa trên những gì họ chia sẻ",
+  "affirmation": "1 câu xác nhận ấm áp, cụ thể — không sáo rỗng"
+}`;
+
+      const content = `Tên: ${name}
+
+QUÁ KHỨ:
+${allAnswers.past.map((a, i) => `${i + 1}. ${a}`).join("\n")}
+
+HIỆN TẠI:
+${allAnswers.present.map((a, i) => `${i + 1}. ${a}`).join("\n")}
+
+TƯƠNG LAI:
+${allAnswers.future.map((a, i) => `${i + 1}. ${a}`).join("\n")}`;
+
+      const raw = await askClaude(sys, [{ role: "user", content }], apiKey, 500);
+      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
+      setResult(json);
+      setPhase("result");
+    } catch (e) {
+      setError("Lỗi: " + e.message);
+      setPhase("round");
+    }
+    setLoading(false);
   };
 
   const finish = () => {
-    const profile = { name, answers: ans, synthesis: synth };
-    LS.set("adhd_profile", profile);
-    LS.set("north_star",   synth.northStar);
-    LS.set("focus_90",     synth.focus90);
-    onDone(profile);
+    const updated = {
+      ...profile,
+      name,
+      reflectAnswers: answers,
+      coreIdentity: result.coreIdentity,
+      superpower: result.superpower,
+      reflectDone: true,
+    };
+    LS.set("adhd_profile", updated);
+    onComplete(updated, result.northStarHint);
   };
 
-  if (phase === "welcome") return (
-    <Mid>
-      <div className="up" style={{ textAlign: "center", maxWidth: "340px" }}>
-        <div style={{ fontSize: "44px", marginBottom: "18px" }}>🧠</div>
-        <h1 style={{ ...serif(), fontSize: "clamp(28px,8vw,36px)", color: C.text, fontWeight: 600, marginBottom: "12px" }}>ADHD OS</h1>
-        <p style={{ color: C.mid, fontSize: "15px", lineHeight: 1.75, marginBottom: "28px" }}>
-          Không phải app productivity.<br />
-          Đây là <span style={{ color: C.amber }}>hệ thống quyết định hàng ngày</span><br />
-          được xây cho não ADHD.
+  if (phase === "intro") return (
+    <Screen center>
+      <div className="fu" style={{ maxWidth: "360px", textAlign: "center" }}>
+        <div style={{ fontSize: "48px", marginBottom: "20px" }}>🪞</div>
+        <h1 style={{ ...serif, fontSize: "32px", color: C.text, marginBottom: "12px", fontWeight: 700 }}>
+          Phản Tư
+        </h1>
+        <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.8, marginBottom: "8px" }}>
+          <em style={{ color: C.amber }}>Reflect</em> — Bước đầu tiên không phải đặt mục tiêu.
         </p>
-        <Lbl style={{ marginBottom: "10px", textAlign: "left" }}>Bạn tên gì?</Lbl>
-        <input value={name} onChange={e => setName(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && name.trim() && setPhase("questions")}
-          placeholder="Tên hoặc biệt danh..."
-          style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`,
-            borderRadius: "12px", padding: "13px 16px", color: C.text, fontSize: "16px", marginBottom: "16px" }} />
-        <Btn full onClick={() => setPhase("questions")} disabled={!name.trim()}>Bắt đầu →</Btn>
-        <p style={{ color: C.dim, fontSize: "12px", marginTop: "12px" }}>7 câu · ~3 phút · không có câu trả lời sai</p>
+        <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.8, marginBottom: "28px" }}>
+          Là hiểu bạn đang đứng ở đâu, bạn là ai — và điều gì thật sự quan trọng với bạn.
+        </p>
+
+        <Card style={{ marginBottom: "24px", textAlign: "left" }}>
+          {REFLECT_ROUNDS.map((r, i) => (
+            <div key={r.id} style={{
+              display: "flex", gap: "12px", alignItems: "flex-start",
+              padding: "10px 0", borderBottom: i < 2 ? `1px solid ${C.border}` : "none",
+            }}>
+              <span style={{ color: r.color, fontSize: "18px", marginTop: "2px" }}>{r.icon}</span>
+              <div>
+                <p style={{ color: C.text, fontSize: "14px", fontWeight: 600 }}>Vòng {i + 1}: {r.title}</p>
+                <p style={{ color: C.textMid, fontSize: "12px", marginTop: "2px", lineHeight: 1.5 }}>{r.intro}</p>
+              </div>
+            </div>
+          ))}
+        </Card>
+
+        <div style={{ marginBottom: "20px" }}>
+          <Tag style={{ display: "block", marginBottom: "8px", textAlign: "left" }}>Bạn tên gì?</Tag>
+          <input value={name} onChange={e => setName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && name.trim() && setPhase("round")}
+            placeholder="Tên hoặc biệt danh..."
+            style={{
+              width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+              borderRadius: "12px", padding: "13px 16px", color: C.text, fontSize: "15px",
+            }} />
+        </div>
+
+        <Btn full onClick={() => setPhase("round")} disabled={!name.trim()} size="lg">
+          Bắt đầu phản tư →
+        </Btn>
+        <p style={{ color: C.textDim, fontSize: "12px", marginTop: "12px" }}>
+          6 câu hỏi · ~10 phút · không có câu trả lời sai
+        </p>
       </div>
-    </Mid>
+    </Screen>
   );
 
-  if (phase === "questions") return (
-    <Col>
-      <div style={{ maxWidth: "460px", width: "100%", padding: "0 4px" }}>
-        <Dots n={7} cur={step} />
-        <div key={step} className="up">
-          <Lbl style={{ marginBottom: "14px" }}>Câu {step + 1} / 7</Lbl>
-          <h2 style={{ ...serif(), color: C.text, fontSize: "clamp(17px,5vw,21px)", lineHeight: 1.55, marginBottom: "20px", fontWeight: 500 }}>{IQ[step].q}</h2>
-          <textarea ref={taRef} value={ans[step]} onChange={e => setA(e.target.value)}
-            placeholder={IQ[step].ph} rows={4}
-            style={{ width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-              borderRadius: "12px", padding: "14px 16px", color: C.text, fontSize: "15px", lineHeight: 1.7, marginBottom: "16px" }} />
+  if (phase === "round") return (
+    <Screen scrollable>
+      <div style={{ maxWidth: "480px", width: "100%", padding: "0 4px" }}>
+        {/* Progress */}
+        <div style={{ marginBottom: "24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
+            <Tag color={round.color}>Vòng {roundIdx + 1}: {round.title}</Tag>
+            <Tag>{doneQ}/{totalQ}</Tag>
+          </div>
+          <ProgressBar value={doneQ} max={totalQ} color={round.color} />
+        </div>
+
+        <div key={`${roundIdx}-${qIdx}`} className="fu">
+          {/* Round intro */}
+          {qIdx === 0 && (
+            <div style={{
+              background: `${round.color}10`, border: `1px solid ${round.color}30`,
+              borderRadius: "14px", padding: "16px", marginBottom: "20px",
+            }}>
+              <span style={{ fontSize: "24px" }}>{round.icon}</span>
+              <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7, marginTop: "8px" }}>{round.intro}</p>
+            </div>
+          )}
+
+          <div style={{ marginBottom: "20px" }}>
+            <Tag style={{ marginBottom: "12px", display: "block" }}>Câu {doneQ + 1}</Tag>
+            <h2 style={{ ...serif, color: C.text, fontSize: "clamp(17px,4.5vw,21px)", lineHeight: 1.6, fontWeight: 500 }}>
+              {round.questions[qIdx].q}
+            </h2>
+          </div>
+
+          <textarea ref={taRef} value={input} onChange={e => setInput(e.target.value)}
+            placeholder={round.questions[qIdx].ph} rows={5}
+            style={{
+              width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+              borderRadius: "14px", padding: "16px", color: C.text, fontSize: "15px",
+              lineHeight: 1.8, marginBottom: "16px",
+            }} />
+
+          {error && <p style={{ color: C.red, fontSize: "13px", marginBottom: "12px" }}>{error}</p>}
+
           <div style={{ display: "flex", gap: "10px" }}>
-            {step > 0 && <Btn v="ghost" onClick={() => setStep(s => s - 1)} style={{ flex: 1 }}>← Lại</Btn>}
-            <Btn onClick={next} disabled={!ans[step]?.trim()} style={{ flex: 2 }}>
-              {step < 6 ? "Tiếp →" : "Hoàn thành ✓"}
+            {(roundIdx > 0 || qIdx > 0) && (
+              <Btn v="ghost" onClick={() => {
+                if (qIdx > 0) setQIdx(i => i - 1);
+                else { setRoundIdx(i => i - 1); setQIdx(REFLECT_ROUNDS[roundIdx - 1].questions.length - 1); }
+                setInput("");
+              }} style={{ flex: 1 }}>← Lại</Btn>
+            )}
+            <Btn onClick={nextQuestion} disabled={!input.trim() || loading} style={{ flex: 2 }}>
+              {doneQ + 1 >= totalQ ? "Hoàn thành ✓" : "Tiếp →"}
             </Btn>
           </div>
+
+          <p style={{ color: C.textDim, fontSize: "11px", textAlign: "center", marginTop: "12px" }}>
+            Viết thật lòng — không có câu trả lời đúng hay sai
+          </p>
         </div>
       </div>
-    </Col>
+    </Screen>
   );
 
   if (phase === "thinking") return (
-    <Mid>
-      <div className="in" style={{ textAlign: "center" }}>
-        <Thinking />
-        <p style={{ color: C.mid, fontSize: "14px" }}>Đang phân tích câu trả lời của bạn...</p>
-      </div>
-    </Mid>
+    <Screen center>
+      <Loading text="AI đang phân tích câu trả lời của bạn..." />
+    </Screen>
   );
 
-  if (phase === "result" && synth) return (
-    <Col>
-      <div style={{ maxWidth: "460px", width: "100%", padding: "0 4px" }}>
-        <div className="up" style={{ textAlign: "center", marginBottom: "24px" }}>
-          <div style={{ fontSize: "28px", marginBottom: "10px" }}>✦</div>
-          <h2 style={{ ...serif(), color: C.text, fontSize: "22px" }}>Ikigai của {name}</h2>
-          <p style={{ color: C.mid, fontSize: "13px", marginTop: "6px" }}>Tổng hợp từ 7 câu trả lời</p>
+  if (phase === "result" && result) return (
+    <Screen scrollable>
+      <div style={{ maxWidth: "480px", width: "100%", padding: "0 4px" }}>
+        <div className="fu" style={{ textAlign: "center", marginBottom: "28px" }}>
+          <div style={{ fontSize: "36px", marginBottom: "12px" }}>✦</div>
+          <h2 style={{ ...serif, color: C.text, fontSize: "26px", marginBottom: "6px" }}>Bản sắc cốt lõi</h2>
+          <p style={{ color: C.textMid, fontSize: "13px" }}>
+            <em>Core Identity</em> — tổng hợp từ phản tư của {name}
+          </p>
         </div>
 
-        <Card className="up d1" style={{ marginBottom: "10px", border: `1px solid ${C.amberLo}` }}>
-          <Lbl style={{ color: C.amber, marginBottom: "8px" }}>Nhận định</Lbl>
-          <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.8 }}>{synth.hypothesis}</p>
+        {/* Core Identity */}
+        <Card className="fu d1" glow style={{ marginBottom: "12px", border: `1px solid ${C.amberLo}` }}>
+          <Tag color={C.amber} style={{ marginBottom: "10px", display: "block" }}>✦ Core Identity — Bản sắc cốt lõi</Tag>
+          <p style={{ ...serif, color: C.amberHi, fontSize: "20px", lineHeight: 1.65, fontStyle: "italic" }}>
+            "{result.coreIdentity}"
+          </p>
         </Card>
 
-        <Card className="up d2" style={{ marginBottom: "10px", background: "#0C0A04", border: `1px solid ${C.amberLo}55` }}>
-          <Lbl style={{ color: C.amberLo, marginBottom: "8px" }}>✦ North Star</Lbl>
-          <p style={{ color: C.amberHi, fontSize: "15px", lineHeight: 1.75, ...serif(), fontStyle: "italic" }}>"{synth.northStar}"</p>
+        <div className="fu d2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
+          <Card>
+            <Tag style={{ marginBottom: "8px", display: "block" }}>Superpower</Tag>
+            <p style={{ color: C.text, fontSize: "13px", lineHeight: 1.6 }}>{result.superpower}</p>
+          </Card>
+          <Card>
+            <Tag style={{ marginBottom: "8px", display: "block" }}>Pattern</Tag>
+            <p style={{ color: C.text, fontSize: "13px", lineHeight: 1.6 }}>{result.pattern}</p>
+          </Card>
+        </div>
+
+        <Card className="fu d3" style={{ marginBottom: "12px", background: C.greenLo, border: `1px solid ${C.green}33` }}>
+          <Tag color={C.green} style={{ marginBottom: "8px", display: "block" }}>Xác nhận</Tag>
+          <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.75, ...serif, fontStyle: "italic" }}>
+            "{result.affirmation}"
+          </p>
         </Card>
 
-        <Card className="up d3" style={{ marginBottom: "20px" }}>
-          <Lbl style={{ marginBottom: "8px" }}>Mục tiêu 90 ngày</Lbl>
-          <p style={{ color: C.mid, fontSize: "14px", lineHeight: 1.7 }}>{synth.focus90}</p>
+        <Card className="fu d4" style={{ marginBottom: "24px" }}>
+          <Tag style={{ marginBottom: "8px", display: "block" }}>North Star — gợi ý</Tag>
+          <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7 }}>{result.northStarHint}</p>
         </Card>
 
-        <div className="up d4">
-          <Btn full onClick={finish}>Vào ADHD OS của tôi →</Btn>
-          <p style={{ color: C.dim, fontSize: "12px", textAlign: "center", marginTop: "10px" }}>Bạn có thể chỉnh sửa bất cứ lúc nào</p>
+        <div className="fu d5">
+          <Btn full onClick={finish} size="lg">
+            Tiếp theo: Xác định hướng đi →
+          </Btn>
         </div>
       </div>
-    </Col>
+    </Screen>
   );
+
   return null;
 }
 
 /* ══════════════════════════════════════════════════════════
-   TODAY SCREEN
+   SCREEN 2 — COMPASS (Hướng đi)
 ══════════════════════════════════════════════════════════ */
-const EL = [
-  { v: 1, e: "😴", label: "Cạn kiệt",    tip: "Làm ít thôi hôm nay. 1 việc nhỏ là đủ.",   color: C.red   },
-  { v: 2, e: "😕", label: "Mệt",          tip: "Chọn việc nhỏ nhất có thể hoàn thành.",     color: "#BB7040" },
-  { v: 3, e: "😐", label: "Bình thường",  tip: "Làm đúng 1 việc quan trọng nhất.",           color: C.mid   },
-  { v: 4, e: "🙂", label: "Khá tốt",      tip: "Tận dụng năng lượng này — bắt đầu ngay.",   color: C.blue  },
-  { v: 5, e: "🔥", label: "Cao điểm",     tip: "Đây là thời điểm vàng. Làm việc khó nhất.", color: C.amber },
-];
+function CompassScreen({ profile, apiKey, onComplete }) {
+  const [phase, setPhase] = useState("intro");
+  const [northStar, setNorthStar] = useState(profile?.northStar || "");
+  const [goal90, setGoal90] = useState(profile?.goal90 || "");
+  const [weekFocus, setWeekFocus] = useState(profile?.weekFocus || "");
+  const [aiSuggestion, setAiSuggestion] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [doubt, setDoubt] = useState(false);
+  const [doubtInput, setDoubtInput] = useState("");
+  const [doubtReply, setDoubtReply] = useState("");
 
-function TodayScreen({ profile, onWin }) {
-  const key   = new Date().toLocaleDateString("vi-VN");
-  const [nrg,  setNrg]  = useState(() => LS.get("nrg_"  + key, 0));
-  const [task, setTask] = useState(() => LS.get("task_" + key, ""));
-  const [done, setDone] = useState(() => LS.get("done_" + key, false));
-  const [edit, setEdit] = useState(() => !LS.get("task_" + key, ""));
-  const taRef = useRef();
+  const getAiSuggestion = async () => {
+    setLoading(true);
+    try {
+      const sys = buildSystemPrompt(profile);
+      const msg = `Dựa vào Core Identity "${profile.coreIdentity}" và gợi ý "${profile?.northStarHint || ""}", hãy đề xuất:
+1. North Star (1 câu, cụ thể, có thể đo được sau 10 năm)
+2. Mục tiêu 90 ngày (1 câu, cụ thể, có thể đạt được)
+3. Focus tuần này (1 việc duy nhất)
 
-  const northStar = LS.get("north_star", profile?.synthesis?.northStar || "");
-  const focus90   = LS.get("focus_90",   profile?.synthesis?.focus90   || "");
-
-  const saveNrg  = v => { setNrg(v);  LS.set("nrg_"  + key, v); };
-  const saveTask = v => { setTask(v); LS.set("task_" + key, v); };
-
-  const markDone = () => {
-    setDone(true); LS.set("done_" + key, true);
-    onWin({ date: key, task, energy: nrg });
-    // SUPABASE: await supabase.from('wins').insert({ date: key, task, energy: nrg, user_id: uid })
+Format: JSON với keys: northStar, goal90, weekFocus`;
+      const raw = await askClaude(sys, [{ role: "user", content: msg }], apiKey, 400);
+      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
+      setNorthStar(json.northStar || "");
+      setGoal90(json.goal90 || "");
+      setWeekFocus(json.weekFocus || "");
+      setAiSuggestion("Đây là gợi ý dựa trên phản tư của bạn. Chỉnh sửa cho đúng với bạn nhất.");
+    } catch (e) {
+      setAiSuggestion("Không lấy được gợi ý — bạn có thể tự điền.");
+    }
+    setLoading(false);
+    setPhase("edit");
   };
 
-  useEffect(() => { if (edit) taRef.current?.focus(); }, [edit]);
+  const askAboutDoubt = async () => {
+    setLoading(true);
+    try {
+      const sys = buildSystemPrompt({ ...profile, northStar, goal90 });
+      const reply = await askClaude(sys, [{ role: "user", content: `Tôi không chắc về hướng này vì: ${doubtInput}\nHãy giúp tôi làm rõ.` }], apiKey, 300);
+      setDoubtReply(reply);
+    } catch (e) { setDoubtReply("Không kết nối được AI."); }
+    setLoading(false);
+    setDoubt(false);
+  };
 
-  const el = EL.find(e => e.v === nrg);
+  const save = () => {
+    const updated = { ...profile, northStar, goal90, weekFocus, compassDone: true };
+    LS.set("adhd_profile", updated);
+    LS.set("north_star", northStar);
+    LS.set("goal_90", goal90);
+    LS.set("week_focus", weekFocus);
+    onComplete(updated);
+  };
 
-  return (
-    <Scroll>
-      {/* North Star */}
-      <div className="up" style={{ background: "#0C0902", border: `1px solid ${C.amberLo}55`,
-        borderRadius: "14px", padding: "16px 18px", marginBottom: "14px" }}>
-        <Lbl style={{ color: C.amberLo, marginBottom: "6px" }}>✦ North Star</Lbl>
-        <p style={{ color: C.amber, fontSize: "13px", lineHeight: 1.7, ...serif(), fontStyle: "italic",
-          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-          "{northStar || "Chưa đặt — hoàn thành onboarding để bắt đầu"}"
+  if (phase === "intro") return (
+    <Screen center>
+      <div className="fu" style={{ maxWidth: "360px", textAlign: "center" }}>
+        <div style={{ fontSize: "48px", marginBottom: "20px" }}>🧭</div>
+        <h1 style={{ ...serif, fontSize: "32px", color: C.text, marginBottom: "12px" }}>Compass</h1>
+        <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.8, marginBottom: "24px" }}>
+          <em style={{ color: C.amber }}>Compass — La bàn</em><br />
+          Từ Core Identity, AI giúp bạn xác định 3 tầng mục tiêu rõ ràng.
         </p>
-      </div>
-
-      {/* Energy */}
-      <Card className="up d1" style={{ marginBottom: "12px" }}>
-        <Lbl style={{ marginBottom: "12px" }}>Năng lượng hôm nay</Lbl>
-        <div style={{ display: "flex", gap: "6px" }}>
-          {EL.map(o => (
-            <button key={o.v} onClick={() => saveNrg(o.v)} style={{
-              flex: 1, padding: "10px 0", borderRadius: "10px", fontSize: "20px",
-              background: nrg === o.v ? o.color + "20" : "transparent",
-              border:     `1.5px solid ${nrg === o.v ? o.color : C.border}`,
-            }}>{o.e}</button>
-          ))}
-        </div>
-        {el && <p style={{ textAlign: "center", marginTop: "10px", fontSize: "13px", color: el.color, fontWeight: 500 }}>
-          {el.label} — {el.tip}
-        </p>}
-      </Card>
-
-      {/* ONE THING */}
-      <div className="up d2" style={{
-        background: done ? C.greenLo : C.card,
-        border: `1.5px solid ${done ? C.green + "55" : C.borderHi}`,
-        borderRadius: "16px", padding: "20px", marginBottom: "12px", transition: "all .4s",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-          <Lbl style={{ color: done ? C.green : C.amber }}>⚡ Việc duy nhất hôm nay</Lbl>
-          {done && <span style={{ fontSize: "18px", animation: "pop .4s ease" }}>✅</span>}
-        </div>
-
-        {done ? (
-          <p style={{ color: C.green, fontSize: "16px", lineHeight: 1.65, ...serif() }}>{task}</p>
-        ) : edit ? (
-          <>
-            <textarea ref={taRef} value={task} onChange={e => saveTask(e.target.value)}
-              placeholder="Nếu chỉ làm được 1 việc hôm nay — việc đó là gì?" rows={3}
-              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`,
-                borderRadius: "10px", padding: "12px 14px", color: C.text, fontSize: "15px",
-                lineHeight: 1.7, marginBottom: "12px" }} />
-            {task.trim() && <Btn full onClick={() => setEdit(false)}>Chốt việc này ✓</Btn>}
-          </>
-        ) : (
-          <>
-            <p style={{ color: C.text, fontSize: "16px", lineHeight: 1.65, ...serif(), marginBottom: "16px" }}>{task}</p>
-            <div style={{ display: "flex", gap: "10px" }}>
-              <Btn v="ghost" onClick={() => setEdit(true)} style={{ flex: 1 }}>Đổi</Btn>
-              <Btn onClick={markDone} style={{ flex: 2 }}>Hoàn thành ✓</Btn>
+        <Card style={{ textAlign: "left", marginBottom: "24px" }}>
+          {[
+            ["🌟", "North Star", "Tầm nhìn 10 năm — định hướng mọi quyết định"],
+            ["⚡", "Sprint 90 ngày", "Mục tiêu cụ thể trong 90 ngày tới"],
+            ["🎯", "Focus tuần này", "1 việc duy nhất quan trọng nhất tuần này"],
+          ].map(([icon, title, desc], i) => (
+            <div key={i} style={{ display: "flex", gap: "12px", padding: "10px 0", borderBottom: i < 2 ? `1px solid ${C.border}` : "none" }}>
+              <span style={{ fontSize: "18px" }}>{icon}</span>
+              <div>
+                <p style={{ color: C.text, fontSize: "14px", fontWeight: 600 }}>{title}</p>
+                <p style={{ color: C.textMid, fontSize: "12px", marginTop: "2px" }}>{desc}</p>
+              </div>
             </div>
-          </>
+          ))}
+        </Card>
+        {loading ? <Loading text="AI đang xây Compass..." /> : (
+          <Btn full onClick={getAiSuggestion} size="lg">AI gợi ý dựa trên phản tư →</Btn>
         )}
       </div>
-
-      {/* Connection */}
-      {task && !edit && (
-        <div className="up d3" style={{ background: C.surface, border: `1px solid ${C.border}`,
-          borderRadius: "12px", padding: "12px 16px" }}>
-          <Lbl style={{ marginBottom: "8px" }}>Việc hôm nay đang phục vụ</Lbl>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={{ color: C.mid, fontSize: "12px", maxWidth: "130px",
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task}</span>
-            <span style={{ color: C.dim }}>→</span>
-            <span style={{ color: C.amber, fontSize: "12px", flex: 1, lineHeight: 1.5 }}>
-              {(focus90 || northStar).substring(0, 70)}...
-            </span>
-          </div>
-        </div>
-      )}
-
-      {done && (
-        <p className="in" style={{ textAlign: "center", color: C.green, fontSize: "14px",
-          lineHeight: 1.7, ...serif(), fontStyle: "italic", marginTop: "20px" }}>
-          "Một win nhỏ vẫn là bằng chứng tiến bộ."
-        </p>
-      )}
-    </Scroll>
+    </Screen>
   );
+
+  if (phase === "edit") return (
+    <Screen scrollable>
+      <div style={{ maxWidth: "480px", width: "100%" }}>
+        <div className="fu" style={{ marginBottom: "24px" }}>
+          <h2 style={{ ...serif, color: C.text, fontSize: "24px", marginBottom: "6px" }}>La bàn của {profile.name}</h2>
+          {aiSuggestion && <p style={{ color: C.amberHi, fontSize: "13px", lineHeight: 1.6 }}>{aiSuggestion}</p>}
+        </div>
+
+        {[
+          { key: "northStar", val: northStar, set: setNorthStar, label: "🌟 North Star (10 năm)", tag: "Tầm nhìn dài hạn", color: C.amber, ph: "Tôi muốn trở thành..." },
+          { key: "goal90", val: goal90, set: setGoal90, label: "⚡ Sprint 90 ngày", tag: "Sprint = giai đoạn tập trung có mục tiêu rõ", color: C.blue, ph: "Trong 90 ngày tới tôi sẽ..." },
+          { key: "weekFocus", val: weekFocus, set: setWeekFocus, label: "🎯 Focus tuần này", tag: "1 việc duy nhất", color: C.green, ph: "Tuần này tôi tập trung vào..." },
+        ].map((item, i) => (
+          <Card key={item.key} className={`fu d${i + 1}`} style={{ marginBottom: "12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+              <Tag color={item.color}>{item.label}</Tag>
+            </div>
+            <p style={{ color: C.textDim, fontSize: "11px", marginBottom: "8px" }}>{item.tag}</p>
+            <textarea value={item.val} onChange={e => item.set(e.target.value)}
+              placeholder={item.ph} rows={2}
+              style={{
+                width: "100%", background: C.surface, border: `1px solid ${C.border}`,
+                borderRadius: "10px", padding: "12px 14px", color: C.text, fontSize: "14px", lineHeight: 1.7,
+              }} />
+          </Card>
+        ))}
+
+        {doubtReply && (
+          <Card className="fu" style={{ marginBottom: "12px", background: C.blueLo, border: `1px solid ${C.blue}33` }}>
+            <Tag color={C.blue} style={{ marginBottom: "8px", display: "block" }}>Coach giải đáp</Tag>
+            <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.75 }}>{doubtReply}</p>
+          </Card>
+        )}
+
+        <div className="fu d4" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <Btn v="ghost" full onClick={() => setDoubt(true)}>
+            🤔 Tôi không chắc hướng này đúng không
+          </Btn>
+          <Btn full onClick={save} disabled={!northStar.trim() || !goal90.trim()} size="lg">
+            Lưu Compass →
+          </Btn>
+        </div>
+
+        {doubt && (
+          <div className="si" style={{ position: "fixed", inset: 0, background: "#0A090688", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100, padding: "20px" }}>
+            <Card style={{ width: "100%", maxWidth: "480px" }}>
+              <Tag style={{ marginBottom: "12px", display: "block" }}>Chia sẻ với Coach</Tag>
+              <textarea value={doubtInput} onChange={e => setDoubtInput(e.target.value)}
+                placeholder="Tôi không chắc vì..." rows={3}
+                style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "12px", color: C.text, fontSize: "14px", lineHeight: 1.7, marginBottom: "12px" }} />
+              <div style={{ display: "flex", gap: "10px" }}>
+                <Btn v="ghost" onClick={() => setDoubt(false)} style={{ flex: 1 }}>Hủy</Btn>
+                <Btn onClick={askAboutDoubt} disabled={!doubtInput.trim() || loading} style={{ flex: 2 }}>
+                  {loading ? "Đang hỏi..." : "Hỏi Coach →"}
+                </Btn>
+              </div>
+            </Card>
+          </div>
+        )}
+      </div>
+    </Screen>
+  );
+
+  return null;
 }
 
 /* ══════════════════════════════════════════════════════════
-   AI COACH — 3 GUIDED FLOWS (not a chatbox)
-   
-   Logic:
-   IF click "Chốt việc hôm nay"  → Morning Alignment flow
-   IF click "Tôi đang bị rối"    → Unstuck flow  
-   IF click "Ghi lại win"        → Win Reflection flow
+   SCREEN 3 — TODAY (Brain dump → AI lọc → 3 bước)
 ══════════════════════════════════════════════════════════ */
+const EL = [
+  { v: 1, e: "😴", label: "Cạn kiệt",   tip: "1 bước 5 phút là đủ hôm nay.",          color: C.red    },
+  { v: 2, e: "😕", label: "Thấp",        tip: "Chọn việc nhỏ nhất có thể bắt đầu.",    color: "#AA6A3A" },
+  { v: 3, e: "😐", label: "Bình thường", tip: "Tập trung vào 1 việc quan trọng nhất.", color: C.textMid},
+  { v: 4, e: "🙂", label: "Tốt",         tip: "Tận dụng — làm việc khó ngay bây giờ.", color: C.blue   },
+  { v: 5, e: "🔥", label: "Cao điểm",    tip: "Thời điểm vàng. Đừng lãng phí.",        color: C.amber  },
+];
 
-// ── FLOW: Morning Alignment ───────────────────────────────
-function FlowMorning({ profile, onDone, onBack }) {
-  const [step,   setStep]   = useState(0); // 0=energy 1=task 2=confirm
-  const [energy, setEnergy] = useState(0);
-  const [task,   setTask]   = useState("");
-  const [aiTip,  setAiTip]  = useState("");
-  const [busy,   setBusy]   = useState(false);
+function TodayScreen({ profile, apiKey, onWin }) {
+  const todayKey = new Date().toLocaleDateString("vi-VN");
+  const [phase, setPhase] = useState(() => {
+    if (LS.get("today_done_" + todayKey)) return "done";
+    if (LS.get("today_steps_" + todayKey)) return "steps";
+    if (LS.get("today_task_" + todayKey)) return "task";
+    return "energy";
+  });
+  const [energy, setEnergy]   = useState(() => LS.get("today_energy_" + todayKey, 0));
+  const [dump,   setDump]     = useState(() => LS.get("today_dump_"   + todayKey, ""));
+  const [task,   setTask]     = useState(() => LS.get("today_task_"   + todayKey, ""));
+  const [steps,  setSteps]    = useState(() => LS.get("today_steps_"  + todayKey, []));
+  const [curStep,setCurStep]  = useState(() => LS.get("today_step_cur_" + todayKey, 0));
+  const [loading, setLoading] = useState(false);
+  const [aiExplain, setAiExplain] = useState("");
   const taRef = useRef();
 
-  const focus90   = LS.get("focus_90",   "");
-  const northStar = LS.get("north_star", "");
+  useEffect(() => {
+    if (phase === "dump") taRef.current?.focus();
+  }, [phase]);
 
-  useEffect(() => { if (step === 1) taRef.current?.focus(); }, [step]);
-
-  const goToTask = async (e) => {
-    setEnergy(e);
-    setBusy(true);
-    const sys = `MORNING ALIGNMENT. User: ${profile.name}. ADHD. 90-day goal: "${focus90}". North Star: "${northStar}". Energy: ${EL.find(x=>x.v===e)?.label}.`;
-    const tip = await callAI(sys, "Tôi cần gợi ý việc quan trọng nhất hôm nay.");
-    setAiTip(tip); setBusy(false); setStep(1);
+  const selectEnergy = (v) => {
+    setEnergy(v); LS.set("today_energy_" + todayKey, v);
+    setPhase("dump");
   };
 
-  const confirm = () => {
-    const key = new Date().toLocaleDateString("vi-VN");
-    LS.set("task_" + key, task);
-    LS.set("nrg_"  + key, energy);
-    // SUPABASE: await supabase.from('daily_focus').upsert({ date: key, task, energy, user_id: uid })
-    onDone({ task, energy });
+  const processdumps = async () => {
+    if (!dump.trim()) return;
+    setLoading(true);
+    LS.set("today_dump_" + todayKey, dump);
+    try {
+      const sys = buildSystemPrompt(profile);
+      const energyLabel = EL.find(e => e.v === energy)?.label || "bình thường";
+      const msg = `Năng lượng hôm nay: ${energyLabel}
+North Star: ${profile.northStar || ""}
+Mục tiêu 90 ngày: ${profile.goal90 || ""}
+
+Brain dump (mọi thứ đang trong đầu):
+${dump}
+
+Hãy:
+1. Xác định 1 việc QUAN TRỌNG NHẤT cần làm hôm nay (phù hợp với năng lượng ${energyLabel})
+2. Giải thích ngắn TẠI SAO đây là việc quan trọng nhất (1 câu)
+
+Format JSON: { "task": "việc cần làm", "why": "tại sao quan trọng nhất" }`;
+
+      const raw = await askClaude(sys, [{ role: "user", content: msg }], apiKey, 300);
+      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
+      setTask(json.task); setAiExplain(json.why);
+      LS.set("today_task_" + todayKey, json.task);
+      setPhase("confirm");
+    } catch (e) { setAiExplain("Lỗi: " + e.message); }
+    setLoading(false);
   };
+
+  const confirmTask = async (useTask) => {
+    setLoading(true);
+    try {
+      const sys = buildSystemPrompt(profile);
+      const energyLabel = EL.find(e => e.v === energy)?.label || "bình thường";
+      const msg = `Việc cần làm hôm nay: "${useTask}"
+Năng lượng: ${energyLabel}
+
+Chia thành đúng 3 bước cực kỳ nhỏ và cụ thể, mỗi bước:
+- Bắt đầu bằng động từ hành động
+- Có thể hoàn thành trong < 15 phút
+- Không cần điều kiện gì khác để bắt đầu
+
+Format JSON: { "steps": ["bước 1", "bước 2", "bước 3"] }`;
+
+      const raw = await askClaude(sys, [{ role: "user", content: msg }], apiKey, 300);
+      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
+      setSteps(json.steps); setCurStep(0);
+      LS.set("today_steps_" + todayKey, json.steps);
+      LS.set("today_step_cur_" + todayKey, 0);
+      setPhase("steps");
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const doneStep = () => {
+    const next = curStep + 1;
+    if (next >= steps.length) {
+      LS.set("today_done_" + todayKey, true);
+      onWin({ date: todayKey, task, energy, steps });
+      setPhase("done");
+    } else {
+      setCurStep(next);
+      LS.set("today_step_cur_" + todayKey, next);
+    }
+  };
+
+  const el = EL.find(e => e.v === energy);
 
   return (
-    <FlowWrapper title="Chốt việc hôm nay" onBack={onBack}>
-      {step === 0 && (
-        <div className="up">
-          <Lbl style={{ marginBottom: "14px" }}>Năng lượng của bạn lúc này?</Lbl>
-          {EL.map(o => (
-            <button key={o.v} onClick={() => goToTask(o.v)} style={{
-              width: "100%", background: "transparent", border: `1px solid ${C.border}`,
-              borderRadius: "12px", padding: "14px 16px", marginBottom: "8px",
-              display: "flex", alignItems: "center", gap: "14px", textAlign: "left",
-            }}>
-              <span style={{ fontSize: "22px" }}>{o.e}</span>
-              <div>
-                <p style={{ color: C.text, fontSize: "14px", fontWeight: 500 }}>{o.label}</p>
-                <p style={{ color: C.mid, fontSize: "12px", marginTop: "2px" }}>{o.tip}</p>
-              </div>
-            </button>
-          ))}
+    <Screen scrollable>
+      {/* Header mini */}
+      <div className="fu" style={{ marginBottom: "20px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <Tag color={C.amber} style={{ display: "block", marginBottom: "4px" }}>⚡ Hôm nay</Tag>
+            <p style={{ color: C.textDim, fontSize: "12px", ...mono }}>{todayKey}</p>
+          </div>
+          {el && (
+            <div style={{ textAlign: "right" }}>
+              <span style={{ fontSize: "22px" }}>{el.e}</span>
+              <p style={{ color: el.color, fontSize: "11px", marginTop: "2px" }}>{el.label}</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* North Star mini */}
+      {profile.northStar && (
+        <div className="fu d1" style={{
+          background: "#0C0A04", border: `1px solid ${C.amberLo}44`,
+          borderRadius: "12px", padding: "12px 16px", marginBottom: "16px",
+        }}>
+          <Tag color={C.amberLo} style={{ marginBottom: "5px", display: "block" }}>✦ North Star</Tag>
+          <p style={{ color: C.amber, fontSize: "13px", lineHeight: 1.65, ...serif, fontStyle: "italic",
+            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+            "{profile.northStar}"
+          </p>
         </div>
       )}
 
-      {step === 1 && (
-        <div key="task" className="up">
-          {busy ? <Thinking /> : (
-            <>
-              {aiTip && (
-                <div style={{ background: C.surface, border: `1px solid ${C.border}`,
-                  borderRadius: "12px", padding: "14px 16px", marginBottom: "16px" }}>
-                  <Lbl style={{ color: C.amberLo, marginBottom: "8px" }}>Coach gợi ý</Lbl>
-                  <p style={{ color: C.mid, fontSize: "14px", lineHeight: 1.7 }}>{aiTip}</p>
+      {/* PHASE: ENERGY */}
+      {phase === "energy" && (
+        <div className="fu d2">
+          <Card>
+            <Tag style={{ marginBottom: "14px", display: "block" }}>Bước 1 — Năng lượng hôm nay?</Tag>
+            <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.6, marginBottom: "16px" }}>
+              Não ADHD hoạt động khác nhau tùy theo mức năng lượng. Chọn thật lòng.
+            </p>
+            {EL.map(o => (
+              <button key={o.v} onClick={() => selectEnergy(o.v)} style={{
+                width: "100%", background: "transparent", border: `1px solid ${C.border}`,
+                borderRadius: "12px", padding: "13px 16px", marginBottom: "8px",
+                display: "flex", alignItems: "center", gap: "14px", textAlign: "left",
+              }}>
+                <span style={{ fontSize: "22px", flexShrink: 0 }}>{o.e}</span>
+                <div>
+                  <p style={{ color: C.text, fontSize: "14px", fontWeight: 600 }}>{o.label}</p>
+                  <p style={{ color: C.textMid, fontSize: "12px", marginTop: "1px" }}>{o.tip}</p>
                 </div>
-              )}
-              <Lbl style={{ marginBottom: "10px" }}>Việc duy nhất quan trọng nhất hôm nay?</Lbl>
-              <textarea ref={taRef} value={task} onChange={e => setTask(e.target.value)}
-                placeholder="Viết ngắn gọn — 1 câu là đủ..." rows={3}
-                style={{ width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-                  borderRadius: "12px", padding: "13px 15px", color: C.text, fontSize: "15px",
-                  lineHeight: 1.7, marginBottom: "14px" }} />
-              <Btn full onClick={() => setStep(2)} disabled={!task.trim()}>Chốt →</Btn>
-            </>
+              </button>
+            ))}
+          </Card>
+        </div>
+      )}
+
+      {/* PHASE: BRAIN DUMP */}
+      {phase === "dump" && (
+        <div key="dump" className="fu">
+          <Card style={{ marginBottom: "14px", background: `${el?.color}08`, border: `1px solid ${el?.color}22` }}>
+            <p style={{ color: el?.color, fontSize: "13px" }}>
+              {el?.e} {el?.label} — {el?.tip}
+            </p>
+          </Card>
+          <Card>
+            <Tag style={{ marginBottom: "10px", display: "block" }}>Bước 2 — Brain Dump</Tag>
+            <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7, marginBottom: "14px" }}>
+              <em style={{ color: C.textMid }}>Brain dump</em> = đổ hết mọi thứ đang trong đầu ra đây.
+              Không lọc, không sắp xếp. Cả việc lớn lẫn nhỏ, cả lo lắng lẫn kế hoạch.
+            </p>
+            <textarea ref={taRef} value={dump} onChange={e => setDump(e.target.value)}
+              placeholder={"Đổ hết ra đây...\n- Cần gọi lại cho khách hàng\n- Lo về bài viết chưa xong\n- Nhớ mua sữa\n- Cần đọc lại proposal\n- ..."}
+              rows={7}
+              style={{
+                width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+                borderRadius: "12px", padding: "14px 16px", color: C.text, fontSize: "14px",
+                lineHeight: 1.8, marginBottom: "14px",
+              }} />
+            {loading ? <Loading text="AI đang phân tích brain dump..." /> : (
+              <Btn full onClick={processdumps} disabled={!dump.trim()} size="lg">
+                AI lọc việc quan trọng nhất →
+              </Btn>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* PHASE: CONFIRM TASK */}
+      {phase === "confirm" && (
+        <div key="confirm" className="fu">
+          <Card style={{ marginBottom: "14px", border: `1px solid ${C.amberLo}` }}>
+            <Tag color={C.amber} style={{ marginBottom: "10px", display: "block" }}>
+              AI chọn việc quan trọng nhất
+            </Tag>
+            <p style={{ ...serif, color: C.text, fontSize: "18px", lineHeight: 1.65, marginBottom: "12px", fontWeight: 500 }}>
+              {task}
+            </p>
+            {aiExplain && (
+              <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.6,
+                borderTop: `1px solid ${C.border}`, paddingTop: "12px", marginTop: "4px" }}>
+                Tại sao: {aiExplain}
+              </p>
+            )}
+          </Card>
+          {loading ? <Loading text="Đang chia nhỏ công việc..." /> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <Btn full onClick={() => confirmTask(task)} size="lg">
+                Đúng — chia thành 3 bước nhỏ →
+              </Btn>
+              <Btn v="ghost" full onClick={() => setPhase("dump")}>
+                ← Điều chỉnh lại
+              </Btn>
+            </div>
           )}
         </div>
       )}
 
-      {step === 2 && (
-        <div className="up">
-          <Card style={{ border: `1px solid ${C.green}44`, background: C.greenLo, marginBottom: "14px" }}>
-            <Lbl style={{ color: C.green, marginBottom: "10px" }}>Chốt lại</Lbl>
-            <p style={{ color: C.text, fontSize: "17px", lineHeight: 1.65, ...serif() }}>{task}</p>
-            <Divider />
-            <p style={{ color: C.mid, fontSize: "13px", lineHeight: 1.6 }}>
-              {EL.find(e => e.v === energy)?.e} Năng lượng: {EL.find(e => e.v === energy)?.label}
-            </p>
+      {/* PHASE: STEPS */}
+      {phase === "steps" && (
+        <div key="steps" className="fu">
+          <Card style={{ marginBottom: "14px" }}>
+            <Tag style={{ marginBottom: "8px", display: "block" }}>Việc hôm nay</Tag>
+            <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.6 }}>{task}</p>
           </Card>
-          <Btn full onClick={confirm}>Bắt đầu ngay →</Btn>
+
+          <Tag style={{ marginBottom: "12px", display: "block" }}>3 bước nhỏ — mỗi bước &lt; 15 phút</Tag>
+
+          {steps.map((s, i) => {
+            const isDone = i < curStep;
+            const isCurrent = i === curStep;
+            return (
+              <div key={i} className={`fu d${i + 1}`} style={{
+                background: isDone ? C.greenLo : isCurrent ? C.cardHi : C.surface,
+                border: `1.5px solid ${isDone ? C.green + "44" : isCurrent ? C.amberLo : C.border}`,
+                borderRadius: "14px", padding: "16px", marginBottom: "10px",
+                opacity: isDone ? 0.6 : 1,
+              }}>
+                <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                  <div style={{
+                    width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
+                    background: isDone ? C.green : isCurrent ? C.amber : C.border,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: isDone ? "14px" : "12px", fontWeight: 700, color: "#0A0906",
+                    ...mono,
+                    animation: isDone ? "checkPop .4s ease" : "none",
+                  }}>
+                    {isDone ? "✓" : i + 1}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <p style={{
+                      color: isDone ? C.green : isCurrent ? C.text : C.textMid,
+                      fontSize: "15px", lineHeight: 1.65,
+                      textDecoration: isDone ? "line-through" : "none",
+                    }}>{s}</p>
+                    {isCurrent && (
+                      <p style={{ color: C.textDim, fontSize: "12px", marginTop: "6px" }}>
+                        ← Đang làm · ≤ 15 phút
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {isCurrent && (
+                  <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: `1px solid ${C.border}` }}>
+                    <Btn full onClick={doneStep} v="green">
+                      {i < steps.length - 1 ? `Xong bước ${i + 1} → bước tiếp` : "Hoàn thành tất cả ✓"}
+                    </Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-    </FlowWrapper>
-  );
-}
 
-// ── FLOW: Unstuck ─────────────────────────────────────────
-const UNSTUCK_Q = [
-  { q: "Bạn đang cố làm điều gì?",              ph: "Mô tả ngắn gọn..." },
-  { q: "Điều gì đang làm bạn chần chừ?",        ph: "Không biết bắt đầu? Sợ làm sai? Quá nhiều việc?..." },
-  { q: "Nếu chỉ làm 1 bước rất nhỏ, bước đó là gì?", ph: "Nhỏ đến mức không thể từ chối làm..." },
-];
-
-function FlowUnstuck({ profile, onBack }) {
-  const [step,  setStep]  = useState(0);
-  const [ans,   setAns]   = useState(Array(3).fill(""));
-  const [result,setResult]= useState("");
-  const [busy,  setBusy]  = useState(false);
-  const taRef = useRef();
-
-  useEffect(() => { taRef.current?.focus(); }, [step]);
-
-  const setA = v => { const a = [...ans]; a[step] = v; setAns(a); };
-
-  const next = async () => {
-    if (step < 2) return setStep(s => s + 1);
-    setBusy(true);
-    const sys = `UNSTUCK FLOW. User: ${profile.name}. ADHD. Đang bị kẹt.`;
-    const msg = `Đang cố làm: ${ans[0]}\nĐang bị chặn vì: ${ans[1]}\nBước nhỏ nhất: ${ans[2]}`;
-    const r = await callAI(sys, msg);
-    // SUPABASE: await supabase.from('coaching_sessions').insert({ type:'unstuck', answers:ans, result:r, user_id:uid })
-    setResult(r); setBusy(false);
-  };
-
-  if (busy) return <FlowWrapper title="Tôi đang bị rối" onBack={onBack}><Thinking /></FlowWrapper>;
-
-  if (result) return (
-    <FlowWrapper title="Bước tiếp theo" onBack={onBack}>
-      <div className="up">
-        <Card style={{ border: `1px solid ${C.green}55`, background: C.greenLo, marginBottom: "14px" }}>
-          <Lbl style={{ color: C.green, marginBottom: "10px" }}>Coach chốt lại</Lbl>
-          <pre style={{ color: C.text, fontSize: "15px", lineHeight: 1.8,
-            fontFamily: "'DM Sans',sans-serif", whiteSpace: "pre-wrap" }}>{result}</pre>
-        </Card>
-        <Btn v="ghost" full onClick={() => { setStep(0); setAns(Array(3).fill("")); setResult(""); }}>
-          Gỡ rối lại từ đầu
-        </Btn>
-      </div>
-    </FlowWrapper>
-  );
-
-  return (
-    <FlowWrapper title="Tôi đang bị rối" onBack={onBack}>
-      <div key={step} className="up">
-        <Dots n={3} cur={step} />
-        <p style={{ color: C.mid, fontSize: "13px", marginBottom: "16px", lineHeight: 1.6 }}>
-          Không cần giải thích nhiều. Trả lời 3 câu — mình sẽ giúp bạn chốt 1 bước.
-        </p>
-        <Lbl style={{ marginBottom: "10px" }}>Câu {step + 1}</Lbl>
-        <p style={{ color: C.text, fontSize: "17px", lineHeight: 1.55, ...serif(),
-          fontStyle: "italic", marginBottom: "18px" }}>
-          "{UNSTUCK_Q[step].q}"
-        </p>
-        <textarea ref={taRef} value={ans[step]} onChange={e => setA(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && ans[step].trim()) { e.preventDefault(); next(); } }}
-          placeholder={UNSTUCK_Q[step].ph} rows={3}
-          style={{ width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-            borderRadius: "12px", padding: "13px 15px", color: C.text, fontSize: "15px",
-            lineHeight: 1.7, marginBottom: "14px" }} />
-        <div style={{ display: "flex", gap: "10px" }}>
-          {step > 0 && <Btn v="ghost" onClick={() => setStep(s => s - 1)} style={{ flex: 1 }}>← Lại</Btn>}
-          <Btn onClick={next} disabled={!ans[step].trim()} style={{ flex: 2 }}>
-            {step < 2 ? "Tiếp →" : "Chốt ngay →"}
+      {/* PHASE: DONE */}
+      {phase === "done" && (
+        <div key="done" className="fu" style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "52px", marginBottom: "20px", animation: "checkPop .5s ease" }}>🏆</div>
+          <Card glow style={{ marginBottom: "16px" }}>
+            <p style={{ color: C.greenHi, fontSize: "16px", lineHeight: 1.65, ...serif, fontStyle: "italic" }}>
+              "{task}"
+            </p>
+            <Divider />
+            <p style={{ color: C.green, fontSize: "14px", lineHeight: 1.7 }}>
+              Bạn đã hoàn thành. Đây là bằng chứng —<br />
+              não ADHD của bạn <em>có thể</em> làm được.
+            </p>
+          </Card>
+          <Btn v="ghost" full onClick={() => setPhase("energy")}>
+            Làm thêm việc khác
           </Btn>
         </div>
-        <p style={{ color: C.dim, fontSize: "11px", textAlign: "center", marginTop: "10px" }}>
-          Enter để tiếp · Shift+Enter xuống dòng
-        </p>
-      </div>
-    </FlowWrapper>
-  );
-}
-
-// ── FLOW: Win Reflection ──────────────────────────────────
-function FlowWin({ onSave, onBack }) {
-  const [text, setText] = useState("");
-  const [done, setDone] = useState(false);
-  const taRef = useRef();
-  useEffect(() => { taRef.current?.focus(); }, []);
-
-  const save = () => {
-    const key = new Date().toLocaleDateString("vi-VN");
-    onSave({ date: key, task: text, energy: 3 });
-    setDone(true);
-  };
-
-  if (done) return (
-    <FlowWrapper title="Win đã ghi lại" onBack={onBack}>
-      <div className="up" style={{ textAlign: "center" }}>
-        <div style={{ fontSize: "48px", marginBottom: "16px", animation: "pop .5s ease" }}>🏆</div>
-        <Card style={{ border: `1px solid ${C.green}44`, background: C.greenLo, marginBottom: "16px" }}>
-          <p style={{ color: C.green, fontSize: "16px", lineHeight: 1.65, ...serif() }}>{text}</p>
-        </Card>
-        <p style={{ color: C.mid, fontSize: "14px", lineHeight: 1.7, fontStyle: "italic", ...serif() }}>
-          "Một win nhỏ vẫn là bằng chứng tiến bộ."
-        </p>
-      </div>
-    </FlowWrapper>
-  );
-
-  return (
-    <FlowWrapper title="Ghi lại win" onBack={onBack}>
-      <div className="up">
-        <Lbl style={{ marginBottom: "10px" }}>Bạn vừa hoàn thành điều gì?</Lbl>
-        <p style={{ color: C.mid, fontSize: "13px", lineHeight: 1.6, marginBottom: "16px" }}>
-          Dù nhỏ cũng tính. Hoàn thành một email, đi tập, đọc 10 trang — tất cả đều là bằng chứng.
-        </p>
-        <textarea ref={taRef} value={text} onChange={e => setText(e.target.value)}
-          placeholder="Mô tả ngắn gọn điều bạn vừa làm xong..." rows={4}
-          style={{ width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-            borderRadius: "12px", padding: "13px 15px", color: C.text, fontSize: "15px",
-            lineHeight: 1.7, marginBottom: "14px" }} />
-        <Btn full onClick={save} disabled={!text.trim()}>Ghi lại win này →</Btn>
-      </div>
-    </FlowWrapper>
-  );
-}
-
-// ── COACH HOME (3 big buttons) ────────────────────────────
-function CoachScreen({ profile, onWin }) {
-  const [flow, setFlow] = useState(null); // null | "morning" | "unstuck" | "win"
-  const [doneTask, setDoneTask] = useState(null);
-
-  if (flow === "morning") return <FlowMorning profile={profile}
-    onDone={t => { setDoneTask(t); setFlow("done_morning"); }}
-    onBack={() => setFlow(null)} />;
-
-  if (flow === "done_morning") return (
-    <FlowWrapper title="Xong rồi!" onBack={() => setFlow(null)}>
-      <div className="up" style={{ textAlign: "center" }}>
-        <div style={{ fontSize: "40px", marginBottom: "16px" }}>⚡</div>
-        <Card style={{ border: `1px solid ${C.amber}44`, marginBottom: "14px" }}>
-          <Lbl style={{ color: C.amber, marginBottom: "8px" }}>Việc hôm nay</Lbl>
-          <p style={{ color: C.text, fontSize: "16px", lineHeight: 1.65, ...serif() }}>
-            {doneTask?.task}
-          </p>
-        </Card>
-        <p style={{ color: C.mid, fontSize: "14px", lineHeight: 1.7 }}>
-          Đã lưu vào Today. Bắt đầu làm ngay — không cần chờ "điều kiện hoàn hảo".
-        </p>
-      </div>
-    </FlowWrapper>
-  );
-
-  if (flow === "unstuck") return <FlowUnstuck profile={profile} onBack={() => setFlow(null)} />;
-
-  if (flow === "win") return <FlowWin
-    onSave={w => { onWin(w); setFlow("done_win"); }}
-    onBack={() => setFlow(null)} />;
-
-  if (flow === "done_win") return (
-    <FlowWrapper title="Win ghi lại rồi" onBack={() => setFlow(null)}>
-      <div className="up" style={{ textAlign: "center", paddingTop: "20px" }}>
-        <div style={{ fontSize: "44px", marginBottom: "16px" }}>🏆</div>
-        <p style={{ color: C.green, fontSize: "16px", ...serif(), fontStyle: "italic" }}>
-          "Não ADHD cần thấy bằng chứng để tin vào bản thân."
-        </p>
-        <Divider />
-        <Btn v="ghost" full onClick={() => setFlow(null)}>Quay lại Coach</Btn>
-      </div>
-    </FlowWrapper>
-  );
-
-  // HOME
-  return (
-    <Scroll>
-      <div className="up" style={{ marginBottom: "24px" }}>
-        <h2 style={{ ...serif(), color: C.text, fontSize: "22px", marginBottom: "6px" }}>AI Coach</h2>
-        <p style={{ color: C.mid, fontSize: "14px", lineHeight: 1.6 }}>
-          Không phải chatbot. Đây là hệ thống dẫn quyết định<br />cho não ADHD.
-        </p>
-      </div>
-
-      {/* 3 BIG BUTTONS — the core UX */}
-      {[
-        {
-          flow: "morning",
-          icon: "⚡",
-          title: "Chốt việc hôm nay",
-          sub: "Chọn năng lượng → AI gợi ý → chốt 1 việc",
-          color: C.amber,
-          bg: "#1A1208",
-          border: C.amberLo,
-        },
-        {
-          flow: "unstuck",
-          icon: "🌀",
-          title: "Tôi đang bị rối",
-          sub: "3 câu hỏi → AI chốt 1 bước nhỏ tiếp theo",
-          color: C.blue,
-          bg: "#08101A",
-          border: "#1A3050",
-        },
-        {
-          flow: "win",
-          icon: "✦",
-          title: "Ghi lại win",
-          sub: "Hoàn thành rồi? Lưu lại — não cần bằng chứng",
-          color: C.green,
-          bg: C.greenLo,
-          border: C.green + "33",
-        },
-      ].map((item, i) => (
-        <button key={i} onClick={() => setFlow(item.flow)}
-          className={`up d${i + 1}`}
-          style={{
-            width: "100%", background: item.bg, border: `1.5px solid ${item.border}`,
-            borderRadius: "16px", padding: "20px", marginBottom: "10px",
-            display: "flex", alignItems: "center", gap: "16px", textAlign: "left",
-          }}>
-          <span style={{ fontSize: "28px", flexShrink: 0 }}>{item.icon}</span>
-          <div>
-            <p style={{ color: C.text, fontSize: "16px", fontWeight: 600, marginBottom: "4px" }}>{item.title}</p>
-            <p style={{ color: C.mid, fontSize: "13px", lineHeight: 1.5 }}>{item.sub}</p>
-          </div>
-          <span style={{ color: C.dim, marginLeft: "auto", fontSize: "18px" }}>›</span>
-        </button>
-      ))}
-
-      <Divider />
-
-      {/* Philosophy */}
-      <div className="up d4">
-        {[
-          "Bạn không cần giải quyết mọi thứ hôm nay.",
-          "Chỉ cần biết 1 bước tiếp theo.",
-          "Làm ít nhưng đúng.",
-        ].map((t, i) => (
-          <p key={i} style={{ color: C.dim, fontSize: "13px", lineHeight: 1.7,
-            textAlign: "center", marginBottom: i < 2 ? "6px" : 0 }}>— {t}</p>
-        ))}
-      </div>
-    </Scroll>
-  );
-}
-
-// ── FLOW WRAPPER (shared layout for all flows) ────────────
-function FlowWrapper({ title, onBack, children }) {
-  return (
-    <Scroll>
-      <div style={{ maxWidth: "460px", width: "100%", padding: "0 4px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px" }}>
-          <button onClick={onBack} style={{ background: "transparent", color: C.mid,
-            fontSize: "20px", padding: "4px 8px" }}>←</button>
-          <h2 style={{ ...serif(), color: C.text, fontSize: "20px" }}>{title}</h2>
-        </div>
-        {children}
-      </div>
-    </Scroll>
+      )}
+    </Screen>
   );
 }
 
 /* ══════════════════════════════════════════════════════════
-   WINS SCREEN
+   SCREEN 4 — COACH (3 tình huống cụ thể)
 ══════════════════════════════════════════════════════════ */
-function WinsScreen({ wins }) {
-  const today    = new Date().toLocaleDateString("vi-VN");
-  const todayW   = wins.filter(w => w.date === today);
-  const pastW    = wins.filter(w => w.date !== today);
-  const totalDays= new Set(wins.map(w => w.date)).size;
+const COACH_MODES = [
+  {
+    id: "distracted",
+    icon: "🌀",
+    title: "Tôi bị phân tâm",
+    sub: "Đang làm rồi mất tập trung — cần reset",
+    color: C.amber,
+    bg: "#1A1408",
+    border: C.amberLo,
+  },
+  {
+    id: "overwhelmed",
+    icon: "🌊",
+    title: "Tôi bị overwhelmed",
+    sub: "Quá nhiều thứ cùng lúc — tê liệt",
+    color: C.blue,
+    bg: C.blueLo,
+    border: C.blue + "33",
+  },
+  {
+    id: "lost",
+    icon: "🔍",
+    title: "Không biết đi đúng hướng không",
+    sub: "Làm mà không chắc có ý nghĩa không",
+    color: C.green,
+    bg: C.greenLo,
+    border: C.green + "33",
+  },
+];
+
+const COACH_PROMPTS = {
+  distracted: (context) => `Người dùng đang bị phân tâm giữa chừng. Việc đang làm: "${context}".
+Hãy:
+1. Xác nhận cảm giác — không phán xét
+2. Hỏi 1 câu duy nhất để giúp họ nhớ lại việc đang làm
+3. Đề xuất 1 kỹ thuật reset trong 2 phút`,
+
+  overwhelmed: (context) => `Người dùng đang overwhelmed (quá tải — tê liệt không hành động được). Họ mô tả: "${context}".
+Hãy:
+1. Xác nhận — không thuyết giảng
+2. Chia nhỏ thành 1 bước 5 phút ngay lập tức
+3. Nói rõ: chỉ làm bước đó thôi, không cần nghĩ xa hơn`,
+
+  lost: (context) => `Người dùng không chắc đang đi đúng hướng. Họ đang làm: "${context}".
+North Star của họ: "${LS.get("north_star", "chưa xác định")}".
+Hãy:
+1. So sánh việc đang làm với North Star
+2. Xác nhận nếu đúng hướng, hoặc gợi ý điều chỉnh nhỏ nếu lệch
+3. Kết thúc bằng 1 câu xác nhận cụ thể`,
+};
+
+function CoachScreen({ profile, apiKey }) {
+  const [mode, setMode] = useState(null);
+  const [input, setInput] = useState("");
+  const [reply, setReply] = useState("");
+  const [loading, setLoading] = useState(false);
+  const taRef = useRef();
+
+  useEffect(() => { if (mode && !reply) taRef.current?.focus(); }, [mode]);
+
+  const ask = async () => {
+    if (!input.trim()) return;
+    setLoading(true);
+    try {
+      const promptFn = COACH_PROMPTS[mode];
+      const sys = buildSystemPrompt(profile) + "\n\n" + promptFn(input);
+      const r = await askClaude(sys, [{ role: "user", content: input }], apiKey, 350);
+      setReply(r);
+    } catch (e) { setReply("Lỗi kết nối AI: " + e.message); }
+    setLoading(false);
+  };
+
+  const reset = () => { setMode(null); setInput(""); setReply(""); };
+
+  const modeInfo = COACH_MODES.find(m => m.id === mode);
 
   return (
-    <Scroll>
-      <div className="up" style={{ marginBottom: "20px" }}>
-        <h2 style={{ ...serif(), color: C.text, fontSize: "22px", marginBottom: "6px" }}>Bằng chứng tiến bộ</h2>
-        <p style={{ color: C.mid, fontSize: "14px" }}>Não ADHD cần thấy bằng chứng để tin vào bản thân.</p>
+    <Screen scrollable>
+      <div className="fu" style={{ marginBottom: "24px" }}>
+        <h2 style={{ ...serif, color: C.text, fontSize: "24px", marginBottom: "6px" }}>AI Coach</h2>
+        <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.6 }}>
+          Không phải chatbot. Đây là hệ thống dẫn quyết định<br />
+          cho 3 tình huống bị kẹt phổ biến nhất.
+        </p>
       </div>
 
-      <div className="up d1" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "18px" }}>
+      {!mode && (
+        <>
+          {COACH_MODES.map((m, i) => (
+            <button key={m.id} onClick={() => setMode(m.id)}
+              className={`fu d${i + 1}`}
+              style={{
+                width: "100%", background: m.bg, border: `1.5px solid ${m.border}`,
+                borderRadius: "16px", padding: "20px", marginBottom: "10px",
+                display: "flex", alignItems: "center", gap: "16px", textAlign: "left",
+              }}>
+              <span style={{ fontSize: "28px", flexShrink: 0 }}>{m.icon}</span>
+              <div>
+                <p style={{ color: C.text, fontSize: "16px", fontWeight: 700, marginBottom: "4px" }}>{m.title}</p>
+                <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.5 }}>{m.sub}</p>
+              </div>
+              <span style={{ color: C.textDim, marginLeft: "auto", fontSize: "20px" }}>›</span>
+            </button>
+          ))}
+
+          <Divider />
+          <div className="fu d4">
+            {["Bạn không cần giải quyết mọi thứ hôm nay.", "Chỉ cần biết 1 bước tiếp theo.", "Làm ít nhưng đúng."].map((t, i) => (
+              <p key={i} style={{ color: C.textDim, fontSize: "13px", textAlign: "center", lineHeight: 1.7 }}>— {t}</p>
+            ))}
+          </div>
+        </>
+      )}
+
+      {mode && (
+        <div key={mode} className="fu">
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px" }}>
+            <button onClick={reset} style={{ background: "transparent", color: C.textMid, fontSize: "20px", padding: "4px 8px" }}>←</button>
+            <h3 style={{ ...serif, color: C.text, fontSize: "20px" }}>{modeInfo?.title}</h3>
+          </div>
+
+          {!reply && !loading && (
+            <Card style={{ marginBottom: "14px" }}>
+              <Tag style={{ marginBottom: "12px", display: "block" }}>
+                {mode === "distracted" ? "Bạn đang làm việc gì khi bị phân tâm?" :
+                 mode === "overwhelmed" ? "Mô tả những thứ đang chồng chất trong đầu bạn:" :
+                 "Bạn đang làm gì và điều gì khiến bạn nghi ngờ?"}
+              </Tag>
+              <textarea ref={taRef} value={input} onChange={e => setInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && input.trim()) { e.preventDefault(); ask(); } }}
+                placeholder="Viết thật lòng — càng cụ thể càng tốt..."
+                rows={4}
+                style={{
+                  width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+                  borderRadius: "12px", padding: "14px 16px", color: C.text, fontSize: "15px",
+                  lineHeight: 1.7, marginBottom: "14px",
+                }} />
+              <div style={{ display: "flex", gap: "10px" }}>
+                <Btn v="ghost" onClick={reset} style={{ flex: 1 }}>Hủy</Btn>
+                <Btn onClick={ask} disabled={!input.trim()} style={{ flex: 2 }}>
+                  Hỏi Coach →
+                </Btn>
+              </div>
+            </Card>
+          )}
+
+          {loading && <Loading text="Coach đang phân tích..." />}
+
+          {reply && (
+            <div key="reply" className="fu">
+              <Card style={{ marginBottom: "14px", border: `1px solid ${modeInfo?.border}`, background: modeInfo?.bg }}>
+                <Tag color={modeInfo?.color} style={{ marginBottom: "12px", display: "block" }}>
+                  Coach trả lời
+                </Tag>
+                <p style={{ color: C.text, fontSize: "15px", lineHeight: 1.85, whiteSpace: "pre-wrap" }}>{reply}</p>
+              </Card>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <Btn v="ghost" onClick={reset} style={{ flex: 1 }}>Quay lại</Btn>
+                <Btn onClick={() => { setInput(""); setReply(""); }} style={{ flex: 1 }}>
+                  Hỏi lại
+                </Btn>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Screen>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   SCREEN 5 — EVIDENCE (Nhật ký bằng chứng)
+══════════════════════════════════════════════════════════ */
+function EvidenceScreen({ wins, profile }) {
+  const today   = new Date().toLocaleDateString("vi-VN");
+  const todayW  = wins.filter(w => w.date === today);
+  const pastW   = wins.filter(w => w.date !== today);
+  const totalDays = new Set(wins.map(w => w.date)).size;
+
+  return (
+    <Screen scrollable>
+      <div className="fu" style={{ marginBottom: "20px" }}>
+        <h2 style={{ ...serif, color: C.text, fontSize: "24px", marginBottom: "6px" }}>Bằng chứng tiến bộ</h2>
+        <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.6 }}>
+          Não ADHD hay quên đi những gì đã làm được.<br />
+          Đây là bằng chứng để nhắc lại.
+        </p>
+      </div>
+
+      {/* Stats */}
+      <div className="fu d1" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "20px" }}>
         {[
-          { n: wins.length, label: "Tổng wins",   color: C.amber },
+          { n: wins.length, label: "Tổng wins", color: C.amber },
           { n: totalDays,   label: "Ngày có win", color: C.green },
+          { n: wins.filter(w => {
+            const d = new Date(); d.setDate(d.getDate() - 7);
+            return new Date(w.date.split("/").reverse().join("-")) >= d;
+          }).length, label: "7 ngày qua", color: C.blue },
         ].map((s, i) => (
-          <Card key={i} style={{ textAlign: "center", padding: "18px" }}>
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: "36px",
-              color: s.color, fontWeight: 500, lineHeight: 1 }}>{s.n}</div>
-            <Lbl style={{ marginTop: "8px" }}>{s.label}</Lbl>
+          <Card key={i} style={{ textAlign: "center", padding: "16px 8px" }}>
+            <div style={{ ...mono, fontSize: "28px", color: s.color, fontWeight: 500, lineHeight: 1 }}>{s.n}</div>
+            <Tag style={{ marginTop: "6px", fontSize: "9px" }}>{s.label}</Tag>
           </Card>
         ))}
       </div>
 
+      {/* Core Identity reminder */}
+      {profile.coreIdentity && (
+        <Card className="fu d2" glow style={{ marginBottom: "16px", border: `1px solid ${C.amberLo}` }}>
+          <Tag color={C.amberLo} style={{ marginBottom: "8px", display: "block" }}>✦ Core Identity của bạn</Tag>
+          <p style={{ color: C.amberHi, fontSize: "15px", lineHeight: 1.7, ...serif, fontStyle: "italic" }}>
+            "{profile.coreIdentity}"
+          </p>
+        </Card>
+      )}
+
+      {/* Wins */}
       {todayW.length > 0 && (
-        <div className="up d2">
-          <Lbl style={{ marginBottom: "10px" }}>Hôm nay</Lbl>
-          {todayW.map((w, i) => <WinRow key={i} w={w} hi />)}
+        <div className="fu d3">
+          <Tag style={{ marginBottom: "10px", display: "block" }}>Hôm nay</Tag>
+          {todayW.map((w, i) => <WinCard key={i} w={w} hi />)}
           <Divider />
         </div>
       )}
 
       {pastW.length > 0 && (
-        <div className="up d3">
-          <Lbl style={{ marginBottom: "10px" }}>Gần đây</Lbl>
-          {pastW.slice(0, 15).map((w, i) => <WinRow key={i} w={w} />)}
+        <div className="fu d4">
+          <Tag style={{ marginBottom: "10px", display: "block" }}>Lịch sử</Tag>
+          {pastW.slice(0, 20).map((w, i) => <WinCard key={i} w={w} />)}
         </div>
       )}
 
       {wins.length === 0 && (
-        <Card className="up d2" style={{ textAlign: "center", padding: "36px 20px" }}>
-          <p style={{ color: C.mid, fontSize: "15px", lineHeight: 1.7, marginBottom: "8px" }}>Chưa có win nào.</p>
-          <p style={{ color: C.dim, fontSize: "13px" }}>Dùng tab Coach → "Ghi lại win" sau khi hoàn thành việc gì đó.</p>
+        <Card className="fu d3" style={{ textAlign: "center", padding: "40px 20px" }}>
+          <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.7, marginBottom: "8px" }}>Chưa có win nào.</p>
+          <p style={{ color: C.textDim, fontSize: "13px" }}>
+            Hoàn thành việc trong tab Hôm nay → win tự động được ghi lại.
+          </p>
         </Card>
       )}
-    </Scroll>
+    </Screen>
   );
 }
 
-function WinRow({ w, hi = false }) {
+function WinCard({ w, hi = false }) {
   const e = EL.find(x => x.v === w.energy);
   return (
-    <div style={{ background: hi ? C.greenLo : C.surface, border: `1px solid ${hi ? C.green + "33" : C.border}`,
-      borderRadius: "12px", padding: "13px 16px", marginBottom: "8px",
-      display: "flex", gap: "12px", alignItems: "flex-start" }}>
-      <span style={{ fontSize: "16px" }}>{e?.e || "✅"}</span>
-      <div style={{ flex: 1 }}>
-        <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.55 }}>{w.task}</p>
-        <p style={{ color: C.dim, fontSize: "10px", marginTop: "4px", fontFamily: "'DM Mono',monospace" }}>{w.date}</p>
+    <div style={{
+      background: hi ? C.greenLo : C.surface,
+      border: `1px solid ${hi ? C.green + "33" : C.border}`,
+      borderRadius: "14px", padding: "14px 16px", marginBottom: "8px",
+    }}>
+      <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+        <span style={{ fontSize: "16px" }}>{e?.e || "✅"}</span>
+        <div style={{ flex: 1 }}>
+          <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.6 }}>{w.task}</p>
+          {w.steps && (
+            <div style={{ marginTop: "8px" }}>
+              {w.steps.map((s, i) => (
+                <p key={i} style={{ color: C.textDim, fontSize: "12px", lineHeight: 1.5 }}>✓ {s}</p>
+              ))}
+            </div>
+          )}
+          <p style={{ color: C.textDim, fontSize: "11px", marginTop: "6px", ...mono }}>{w.date}</p>
+        </div>
+        <span style={{ color: C.green, fontSize: "14px" }}>✓</span>
       </div>
-      <span style={{ color: C.green, fontSize: "13px" }}>✓</span>
     </div>
   );
 }
 
 /* ══════════════════════════════════════════════════════════
-   LAYOUT HELPERS
+   SCREEN WRAPPERS
 ══════════════════════════════════════════════════════════ */
-function Mid({ children }) {
-  return <div style={{ height: "calc(100dvh - 64px)", display: "flex", alignItems: "center",
-    justifyContent: "center", padding: "24px 20px" }}>{children}</div>;
-}
-function Col({ children }) {
-  return <div style={{ height: "calc(100dvh - 64px)", display: "flex", flexDirection: "column",
-    alignItems: "center", justifyContent: "center", padding: "24px 20px",
-    overflowY: "auto", maxWidth: "480px", margin: "0 auto" }}>{children}</div>;
-}
-function Scroll({ children }) {
-  return <div style={{ height: "calc(100dvh - 64px)", overflowY: "auto",
-    padding: "20px 16px", maxWidth: "480px", margin: "0 auto" }}>{children}</div>;
+function Screen({ children, center = false, scrollable = false }) {
+  return (
+    <div style={{
+      height: "calc(100dvh - 58px)", overflowY: scrollable ? "auto" : "hidden",
+      display: "flex", flexDirection: center ? undefined : "column",
+      alignItems: center ? "center" : undefined,
+      justifyContent: center ? "center" : undefined,
+      padding: "20px 16px", maxWidth: "480px", margin: "0 auto",
+    }}>
+      {children}
+    </div>
+  );
 }
 
 /* ══════════════════════════════════════════════════════════
    NAVIGATION
 ══════════════════════════════════════════════════════════ */
 const TABS = [
-  { id: "today", icon: "⚡", label: "Hôm nay"  },
-  { id: "coach", icon: "🧠", label: "Coach"    },
-  { id: "wins",  icon: "✦",  label: "Tiến bộ"  },
+  { id: "reflect",  icon: "🪞", label: "Phản Tư"   },
+  { id: "compass",  icon: "🧭", label: "Hướng Đi"  },
+  { id: "today",    icon: "⚡",  label: "Hôm Nay"   },
+  { id: "coach",    icon: "🧠", label: "Coach"     },
+  { id: "evidence", icon: "✦",  label: "Tiến Bộ"  },
 ];
 
-function Nav({ active, set }) {
+function Nav({ active, set, profile }) {
   return (
-    <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
-      width: "100%", maxWidth: "480px", background: C.surface, borderTop: `1px solid ${C.border}`,
-      display: "flex", paddingBottom: "env(safe-area-inset-bottom)", zIndex: 20 }}>
-      {TABS.map(t => (
-        <button key={t.id} onClick={() => set(t.id)} style={{ flex: 1, padding: "12px 4px 14px",
-          background: "transparent", display: "flex", flexDirection: "column",
-          alignItems: "center", gap: "4px" }}>
-          <span style={{ fontSize: "20px", opacity: active === t.id ? 1 : .3, transition: "all .2s" }}>{t.icon}</span>
-          <span style={{ color: active === t.id ? C.amber : C.dim, fontSize: "10px",
-            fontFamily: "'DM Mono',monospace", letterSpacing: ".5px", transition: "all .2s" }}>
-            {t.label}
-          </span>
-        </button>
-      ))}
+    <nav style={{
+      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+      width: "100%", maxWidth: "480px",
+      background: C.surface + "F8", backdropFilter: "blur(16px)",
+      borderTop: `1px solid ${C.border}`,
+      display: "flex", paddingBottom: "env(safe-area-inset-bottom)", zIndex: 20,
+    }}>
+      {TABS.map(t => {
+        const isActive = active === t.id;
+        const isDone = (t.id === "reflect" && profile?.reflectDone) || (t.id === "compass" && profile?.compassDone);
+        return (
+          <button key={t.id} onClick={() => set(t.id)} style={{
+            flex: 1, padding: "10px 2px 12px", background: "transparent",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+          }}>
+            <span style={{ fontSize: "18px", opacity: isActive ? 1 : 0.3, transition: "all .2s", position: "relative" }}>
+              {t.icon}
+              {isDone && <span style={{ position: "absolute", top: "-2px", right: "-4px", fontSize: "8px" }}>✓</span>}
+            </span>
+            <span style={{
+              color: isActive ? C.amber : C.textDim, fontSize: "9px", ...mono,
+              letterSpacing: "0.5px", transition: "all .2s",
+            }}>
+              {t.label}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
 
 /* ══════════════════════════════════════════════════════════
-   ROOT
+   ROOT APP
 ══════════════════════════════════════════════════════════ */
 export default function App() {
+  const [apiKey,  setApiKey]  = useState(() => LS.get("adhd_api_key", null));
   const [profile, setProfile] = useState(() => LS.get("adhd_profile", null));
-  const [tab,     setTab]     = useState("today");
+  const [tab,     setTab]     = useState("reflect");
   const [wins,    setWins]    = useState(() => LS.get("adhd_wins", []));
 
-  const addWin = (w) => {
-    const updated = [w, ...wins];
-    setWins(updated);
-    LS.set("adhd_wins", updated);
-    // SUPABASE: await supabase.from('wins').insert({ ...w, user_id: uid })
+  // Auto-navigate after onboarding steps
+  const handleReflectDone = (updatedProfile, northStarHint) => {
+    const p = { ...updatedProfile, northStarHint };
+    setProfile(p); LS.set("adhd_profile", p);
+    setTab("compass");
   };
 
-  if (!profile) return <><G /><Onboarding onDone={p => { setProfile(p); setTab("coach"); }} /></>;
+  const handleCompassDone = (updatedProfile) => {
+    setProfile(updatedProfile); LS.set("adhd_profile", updatedProfile);
+    setTab("today");
+  };
+
+  const addWin = (win) => {
+    const updated = [win, ...wins];
+    setWins(updated); LS.set("adhd_wins", updated);
+    // SUPABASE: await supabase.from('wins').insert({ ...win, user_id: uid })
+  };
+
+  if (!apiKey) return <><GS /><ApiKeyScreen onSave={setApiKey} /></>;
 
   return (
     <>
-      <G />
+      <GS />
+
       {/* Header */}
-      <header style={{ position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)",
-        width: "100%", maxWidth: "480px", zIndex: 10, background: C.bg + "F0",
-        backdropFilter: "blur(12px)", borderBottom: `1px solid ${C.border}`,
-        padding: "13px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
-          <div style={{ width: "26px", height: "26px", borderRadius: "7px",
-            background: `linear-gradient(135deg,${C.amber},${C.amberLo})`,
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px" }}>🧠</div>
-          <span style={{ ...serif(), color: C.text, fontSize: "15px", fontWeight: 500 }}>ADHD OS</span>
+      <header style={{
+        position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)",
+        width: "100%", maxWidth: "480px", zIndex: 10,
+        background: C.bg + "F0", backdropFilter: "blur(16px)",
+        borderBottom: `1px solid ${C.border}`,
+        padding: "12px 18px",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{
+            width: "28px", height: "28px", borderRadius: "8px",
+            background: `linear-gradient(135deg, ${C.amber}, ${C.amberLo})`,
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px",
+          }}>🧠</div>
+          <span style={{ ...serif, color: C.text, fontSize: "16px", fontWeight: 600 }}>ADHD OS</span>
         </div>
-        <span style={{ color: C.dim, fontSize: "11px", fontFamily: "'DM Mono',monospace" }}>
-          {profile.name}
-        </span>
+        {profile?.name && (
+          <span style={{ color: C.textDim, fontSize: "11px", ...mono }}>{profile.name}</span>
+        )}
       </header>
 
-      {/* Screens */}
-      <div style={{ paddingTop: "58px" }}>
-        {tab === "today" && <TodayScreen profile={profile} onWin={addWin} />}
-        {tab === "coach" && <CoachScreen profile={profile}  onWin={addWin} />}
-        {tab === "wins"  && <WinsScreen  wins={wins} />}
+      {/* Main content */}
+      <div style={{ paddingTop: "56px" }}>
+        {tab === "reflect"  && <ReflectScreen  profile={profile || {}} apiKey={apiKey} onComplete={handleReflectDone} />}
+        {tab === "compass"  && <CompassScreen  profile={profile || {}} apiKey={apiKey} onComplete={handleCompassDone} />}
+        {tab === "today"    && <TodayScreen    profile={profile || {}} apiKey={apiKey} onWin={addWin} />}
+        {tab === "coach"    && <CoachScreen    profile={profile || {}} apiKey={apiKey} />}
+        {tab === "evidence" && <EvidenceScreen wins={wins} profile={profile || {}} />}
       </div>
 
-      <Nav active={tab} set={setTab} />
+      <Nav active={tab} set={setTab} profile={profile} />
     </>
   );
 }
