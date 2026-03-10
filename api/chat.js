@@ -23,14 +23,3 @@ export default async function handler(req, res) {
   res.status(response.status).json(data);
 }
 ```
-→ Commit file
-
----
-
-**Bước 3** — Vào `App.tsx` trên GitHub → tìm dòng này:
-```
-https://api.anthropic.com/v1/messages
-```
-→ Đổi thành:
-```
-/api/chat
