@@ -64,19 +64,12 @@ const LS = {
    CLAUDE API
 ══════════════════════════════════════════════════════════ */
 async function askClaude(systemPrompt, messages, apiKey, maxTokens = 600) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/chat", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages,
-    }),
+    body: JSON.stringify({ systemPrompt, messages, apiKey, maxTokens }),
   });
   if (!res.ok) {
     const err = await res.json();
