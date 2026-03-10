@@ -63,16 +63,14 @@ const LS = {
 /* ══════════════════════════════════════════════════════════
    CLAUDE API
 ══════════════════════════════════════════════════════════ */
-async function askClaude(systemPrompt, messages, apiKey, maxTokens = 600) {
+async function askClaude(systemPrompt, messages, maxTokens = 600) {
   const res = await fetch("/api/chat", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ systemPrompt, messages, apiKey, maxTokens }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ systemPrompt, messages, maxTokens }),
   });
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err?.error?.message || "Lỗi kết nối API");
   }
   const data = await res.json();
@@ -243,72 +241,6 @@ function StepDots({ total, current }) {
   );
 }
 
-/* ══════════════════════════════════════════════════════════
-   API KEY SCREEN
-══════════════════════════════════════════════════════════ */
-function ApiKeyScreen({ onSave }) {
-  const [key, setKey] = useState("");
-  const [err, setErr] = useState("");
-  const [testing, setTesting] = useState(false);
-
-  const test = async () => {
-    if (!key.trim().startsWith("sk-ant-")) {
-      return setErr("API key không đúng định dạng — phải bắt đầu bằng sk-ant-");
-    }
-    setTesting(true); setErr("");
-    try {
-      await askClaude("Trả lời ngắn gọn bằng tiếng Việt.", [{ role: "user", content: "Xin chào" }], key.trim(), 50);
-      LS.set("adhd_api_key", key.trim());
-      onSave(key.trim());
-    } catch (e) {
-      setErr("API key không hợp lệ: " + e.message);
-    }
-    setTesting(false);
-  };
-
-  return (
-    <div style={{ minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
-      <div className="fu" style={{ maxWidth: "380px", width: "100%", textAlign: "center" }}>
-        <div style={{ fontSize: "44px", marginBottom: "20px" }}>🔑</div>
-        <h2 style={{ ...serif, color: C.text, fontSize: "26px", marginBottom: "10px" }}>Kết nối AI</h2>
-        <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.75, marginBottom: "28px" }}>
-          ADHD OS dùng <strong style={{ color: C.amber }}>Claude AI</strong> — trí tuệ nhân tạo của Anthropic —
-          để coach bạn thật sự, không phải giả lập.
-        </p>
-
-        <Card style={{ textAlign: "left", marginBottom: "20px" }}>
-          <Tag style={{ marginBottom: "10px", display: "block" }}>Lấy API Key</Tag>
-          <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7, marginBottom: "12px" }}>
-            1. Vào <span style={{ color: C.amberHi }}>console.anthropic.com</span><br />
-            2. Đăng ký / đăng nhập<br />
-            3. Vào <em>API Keys</em> → <em>Create Key</em><br />
-            4. Copy key và paste vào đây
-          </p>
-          <p style={{ color: C.textDim, fontSize: "12px" }}>
-            Chi phí ước tính: ~$0.50–$2 / tháng cho 1 người dùng
-          </p>
-        </Card>
-
-        <input
-          value={key} onChange={e => setKey(e.target.value)}
-          placeholder="sk-ant-api03-..."
-          type="password"
-          style={{
-            width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-            borderRadius: "12px", padding: "13px 16px", color: C.text, fontSize: "14px",
-            marginBottom: "12px", letterSpacing: "0.5px",
-          }}
-        />
-
-        {err && <p style={{ color: C.red, fontSize: "13px", marginBottom: "12px" }}>{err}</p>}
-
-        <Btn full onClick={test} disabled={!key.trim() || testing} size="lg">
-          {testing ? "Đang kiểm tra..." : "Kết nối & bắt đầu →"}
-        </Btn>
-      </div>
-    </div>
-  );
-}
 
 /* ══════════════════════════════════════════════════════════
    SCREEN 1 — REFLECT (Phản tư sâu 3 vòng)
@@ -349,7 +281,7 @@ const REFLECT_ROUNDS = [
   }
 ];
 
-function ReflectScreen({ profile, apiKey, onComplete }) {
+function ReflectScreen({ profile, onComplete }) {
   const [phase, setPhase] = useState("intro"); // intro | round | thinking | result
   const [roundIdx, setRoundIdx] = useState(0);
   const [qIdx, setQIdx] = useState(0);
@@ -408,7 +340,7 @@ ${allAnswers.present.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 TƯƠNG LAI:
 ${allAnswers.future.map((a, i) => `${i + 1}. ${a}`).join("\n")}`;
 
-      const raw = await askClaude(sys, [{ role: "user", content }], apiKey, 500);
+      const raw = await askClaude(sys, [{ role: "user", content }], 500);
       const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
       setResult(json);
       setPhase("result");
@@ -607,7 +539,7 @@ ${allAnswers.future.map((a, i) => `${i + 1}. ${a}`).join("\n")}`;
 /* ══════════════════════════════════════════════════════════
    SCREEN 2 — COMPASS (Hướng đi)
 ══════════════════════════════════════════════════════════ */
-function CompassScreen({ profile, apiKey, onComplete }) {
+function CompassScreen({ profile, onComplete }) {
   const [phase, setPhase] = useState("intro");
   const [northStar, setNorthStar] = useState(profile?.northStar || "");
   const [goal90, setGoal90] = useState(profile?.goal90 || "");
@@ -628,7 +560,7 @@ function CompassScreen({ profile, apiKey, onComplete }) {
 3. Focus tuần này (1 việc duy nhất)
 
 Format: JSON với keys: northStar, goal90, weekFocus`;
-      const raw = await askClaude(sys, [{ role: "user", content: msg }], apiKey, 400);
+      const raw = await askClaude(sys, [{ role: "user", content: msg }], 400);
       const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
       setNorthStar(json.northStar || "");
       setGoal90(json.goal90 || "");
@@ -645,7 +577,7 @@ Format: JSON với keys: northStar, goal90, weekFocus`;
     setLoading(true);
     try {
       const sys = buildSystemPrompt({ ...profile, northStar, goal90 });
-      const reply = await askClaude(sys, [{ role: "user", content: `Tôi không chắc về hướng này vì: ${doubtInput}\nHãy giúp tôi làm rõ.` }], apiKey, 300);
+      const reply = await askClaude(sys, [{ role: "user", content: `Tôi không chắc về hướng này vì: ${doubtInput}\nHãy giúp tôi làm rõ.` }], 300);
       setDoubtReply(reply);
     } catch (e) { setDoubtReply("Không kết nối được AI."); }
     setLoading(false);
@@ -769,7 +701,7 @@ const EL = [
   { v: 5, e: "🔥", label: "Cao điểm",    tip: "Thời điểm vàng. Đừng lãng phí.",        color: C.amber  },
 ];
 
-function TodayScreen({ profile, apiKey, onWin }) {
+function TodayScreen({ profile, onWin }) {
   const todayKey = new Date().toLocaleDateString("vi-VN");
   const [phase, setPhase] = useState(() => {
     if (LS.get("today_done_" + todayKey)) return "done";
@@ -815,7 +747,7 @@ Hãy:
 
 Format JSON: { "task": "việc cần làm", "why": "tại sao quan trọng nhất" }`;
 
-      const raw = await askClaude(sys, [{ role: "user", content: msg }], apiKey, 300);
+      const raw = await askClaude(sys, [{ role: "user", content: msg }], 300);
       const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
       setTask(json.task); setAiExplain(json.why);
       LS.set("today_task_" + todayKey, json.task);
@@ -839,7 +771,7 @@ Chia thành đúng 3 bước cực kỳ nhỏ và cụ thể, mỗi bước:
 
 Format JSON: { "steps": ["bước 1", "bước 2", "bước 3"] }`;
 
-      const raw = await askClaude(sys, [{ role: "user", content: msg }], apiKey, 300);
+      const raw = await askClaude(sys, [{ role: "user", content: msg }], 300);
       const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
       setSteps(json.steps); setCurStep(0);
       LS.set("today_steps_" + todayKey, json.steps);
@@ -1115,7 +1047,7 @@ Hãy:
 3. Kết thúc bằng 1 câu xác nhận cụ thể`,
 };
 
-function CoachScreen({ profile, apiKey }) {
+function CoachScreen({ profile }) {
   const [mode, setMode] = useState(null);
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("");
@@ -1130,7 +1062,7 @@ function CoachScreen({ profile, apiKey }) {
     try {
       const promptFn = COACH_PROMPTS[mode];
       const sys = buildSystemPrompt(profile) + "\n\n" + promptFn(input);
-      const r = await askClaude(sys, [{ role: "user", content: input }], apiKey, 350);
+      const r = await askClaude(sys, [{ role: "user", content: input }], 350);
       setReply(r);
     } catch (e) { setReply("Lỗi kết nối AI: " + e.message); }
     setLoading(false);
@@ -1401,12 +1333,10 @@ function Nav({ active, set, profile }) {
    ROOT APP
 ══════════════════════════════════════════════════════════ */
 export default function App() {
-  const [apiKey,  setApiKey]  = useState(() => LS.get("adhd_api_key", null));
   const [profile, setProfile] = useState(() => LS.get("adhd_profile", null));
   const [tab,     setTab]     = useState("reflect");
   const [wins,    setWins]    = useState(() => LS.get("adhd_wins", []));
 
-  // Auto-navigate after onboarding steps
   const handleReflectDone = (updatedProfile, northStarHint) => {
     const p = { ...updatedProfile, northStarHint };
     setProfile(p); LS.set("adhd_profile", p);
@@ -1421,10 +1351,7 @@ export default function App() {
   const addWin = (win) => {
     const updated = [win, ...wins];
     setWins(updated); LS.set("adhd_wins", updated);
-    // SUPABASE: await supabase.from('wins').insert({ ...win, user_id: uid })
   };
-
-  if (!apiKey) return <><GS /><ApiKeyScreen onSave={setApiKey} /></>;
 
   return (
     <>
@@ -1454,10 +1381,10 @@ export default function App() {
 
       {/* Main content */}
       <div style={{ paddingTop: "56px" }}>
-        {tab === "reflect"  && <ReflectScreen  profile={profile || {}} apiKey={apiKey} onComplete={handleReflectDone} />}
-        {tab === "compass"  && <CompassScreen  profile={profile || {}} apiKey={apiKey} onComplete={handleCompassDone} />}
-        {tab === "today"    && <TodayScreen    profile={profile || {}} apiKey={apiKey} onWin={addWin} />}
-        {tab === "coach"    && <CoachScreen    profile={profile || {}} apiKey={apiKey} />}
+        {tab === "reflect"  && <ReflectScreen  profile={profile || {}} onComplete={handleReflectDone} />}
+        {tab === "compass"  && <CompassScreen  profile={profile || {}} onComplete={handleCompassDone} />}
+        {tab === "today"    && <TodayScreen    profile={profile || {}} onWin={addWin} />}
+        {tab === "coach"    && <CoachScreen    profile={profile || {}} />}
         {tab === "evidence" && <EvidenceScreen wins={wins} profile={profile || {}} />}
       </div>
 
