@@ -193,6 +193,90 @@ function safeParseJSON(text, fallback) {
   } catch { return fallback; }
 }
 
+// ─── FALLBACK DATA (dùng khi AI không khả dụng) ──────────────
+// Xây từ câu trả lời thật của user — không phải data giả
+function fallbackSelfAwareness(p1) {
+  const split = (str) => str ? [...new Set(str.split(/[,\n،]/).map(s => s.trim()).filter(s => s.length > 1))].slice(0, 5) : [];
+  return {
+    strengths: split(p1.strengths).length > 0 ? split(p1.strengths) : ["Chưa xác định — cập nhật sau"],
+    weaknesses: p1.pains.filter(Boolean).length > 0 ? p1.pains.filter(Boolean) : ["Chưa xác định — cập nhật sau"],
+    triggers: split(p1.triggers).length > 0 ? split(p1.triggers) : ["Chưa xác định — cập nhật sau"],
+    toDo: split(p1.toDo).length > 0 ? split(p1.toDo) : ["Xác định sau"],
+    notToDo: split(p1.notToDo).length > 0 ? split(p1.notToDo) : ["Xác định sau"],
+    toBe: split(p1.toBe).length > 0 ? split(p1.toBe) : ["Xác định sau"],
+    summary: `Bạn đang trải qua: ${p1.pains.filter(Boolean).join(", ") || "các thách thức ADHD điển hình"}. Điểm mạnh tự nhiên: ${p1.strengths || "chưa ghi nhận"}. Điều cần chú ý: ${p1.sabotage || "pattern tự phá nhịp cần theo dõi thêm"}.`,
+  };
+}
+
+function fallbackIkigai(p1, p2) {
+  const name = p2.futureSelf || "phiên bản tốt hơn của bản thân";
+  return {
+    hypotheses: [
+      {
+        title: p2.valueToOthers ? `Chuyên gia về: ${p2.valueToOthers.slice(0, 40)}` : "Người xây hệ vận hành cá nhân",
+        fit: "Phù hợp với những gì người khác đã nhờ bạn giúp và kỹ năng bạn đang có.",
+        risk: "Dễ lan man nếu không giữ focus vào 1 hướng cụ thể.",
+        test: "Giúp 3 người giải 1 vấn đề cụ thể trong 2 tuần — ghi lại kết quả.",
+      },
+      {
+        title: p2.problem ? `Giải quyết: ${p2.problem.slice(0, 40)}` : "Người tạo giải pháp thực chiến cho ADHD",
+        fit: "Bắt nguồn từ nỗi đau thật bạn đã trải qua — đây là lợi thế không ai có.",
+        risk: "Dễ bị cuốn vào giải quyết cho người khác mà quên hệ thống của chính mình.",
+        test: "Dùng hệ thống này 14 ngày liên tục và ghi lại before/after cụ thể.",
+      },
+      {
+        title: p2.meaning ? `Sống theo: ${p2.meaning.slice(0, 40)}` : "Người dẫn đường qua trải nghiệm thực",
+        fit: "Kết nối ý nghĩa sâu với hành động hằng ngày — bền vững hơn motivation bề mặt.",
+        risk: "Dễ trở thành nội dung truyền cảm hứng thiếu đầu ra đo được.",
+        test: "Xuất bản 7 nội dung hoặc hoàn thành 7 hành động có KPI nhỏ trong 2 tuần.",
+      },
+    ],
+    recommendation: p2.valueToOthers ? `Chuyên gia về: ${p2.valueToOthers.slice(0, 40)}` : "Người xây hệ vận hành cá nhân",
+    whyRecommended: `Hướng này gắn trực tiếp với giá trị người khác thấy ở bạn và nỗi đau thật bạn muốn giải quyết: ${p1.pains[0] || "thách thức ADHD hằng ngày"}.`,
+    manifesto: `Tôi không chạy theo cảm hứng ngắn hạn. Tôi xây hệ vận hành đủ rõ để tiến lên từng ngày — dù não ADHD có muốn né hay không.`,
+    northStar: p2.futureSelf
+      ? `Trong 1 năm tới, tôi trở thành ${name} — với routine ổn định, hoàn thành việc quan trọng đều đặn, và tạo ra giá trị thực cho người xung quanh.`
+      : `Trong 1 năm tới, tôi vận hành cuộc sống rõ ràng hơn: biết việc gì quan trọng, làm được đều đặn, và không còn kết thúc ngày trong mơ hồ.`,
+    plan90d: [
+      `Ổn định routine sáng-tối và planner top 3 mỗi ngày trong 30 ngày đầu`,
+      `Xác định và kiểm chứng 1 hướng Ikigai bằng hành động cụ thể trong 30 ngày giữa`,
+      `Đo completion rate và điều chỉnh hệ thống dựa trên dữ liệu thực trong 30 ngày cuối`,
+    ],
+    stopDoing: [
+      "Ôm quá nhiều mục tiêu cùng lúc",
+      p1.sabotage ? p1.sabotage.slice(0, 50) : "Đặt kế hoạch đẹp nhưng quá nặng để thực hiện",
+      "Dùng bận rộn để thay thế tiến bộ thật",
+    ],
+  };
+}
+
+function fallbackRoutines(p3) {
+  const peak = p3.peakTime === "morning" ? "sáng" : p3.peakTime === "afternoon" ? "chiều" : "tối";
+  return {
+    morning: [
+      { title: "Uống 1 ly nước + hít thở 3 lần", minutes: 3, purpose: "Đánh thức hệ thần kinh nhẹ nhàng" },
+      { title: "Viết 3 điều biết ơn", minutes: 5, purpose: "Ổn định tâm trí trước ngày mới" },
+      { title: "Chốt 3 việc quan trọng hôm nay", minutes: 7, purpose: "Giảm lan man ngay từ đầu ngày" },
+      { title: p3.exercise || "Vận động 10 phút", minutes: 10, purpose: "Tăng dopamine lành mạnh" },
+    ],
+    work: [
+      { title: `Làm việc số 1 vào khung ${peak}`, minutes: 25, purpose: "Dùng năng lượng cao nhất cho việc quan trọng nhất" },
+      { title: "Nghỉ ngắn + kiểm tra đang đúng hướng chưa", minutes: 5, purpose: "Chống time blindness" },
+      { title: "Chỉ mở task trong danh sách top 3", minutes: 3, purpose: "Tránh bị cuốn vào việc mới xuất hiện" },
+    ],
+    evening: [
+      { title: "Check-out ngày — làm được gì / trật gì", minutes: 5, purpose: "Không kết thúc ngày trong mơ hồ" },
+      { title: "Brain dump — xả hết đầu óc ra giấy", minutes: 5, purpose: "Giải phóng cognitive load" },
+      { title: "Chuẩn bị 1 việc cho ngày mai", minutes: 3, purpose: "Giảm ma sát buổi sáng" },
+    ],
+    minimum: [
+      { title: "1 việc quan trọng trong 10 phút", minutes: 10, purpose: "Giữ nhịp tối thiểu dù ngày tệ" },
+      { title: "Uống nước + đứng dậy khỏi ghế", minutes: 3, purpose: "Reset cơ thể" },
+      { title: "Viết 1 dòng: hôm nay tôi đã làm được...", minutes: 2, purpose: "Duy trì vòng lặp reflection" },
+    ],
+  };
+}
+
 // AI Moment 1: Self-Awareness Analysis
 async function generateSelfAwareness(p1) {
   const system = `You are a Self-Awareness Analyst for ADHD OS. Analyze the user's data and return ONLY valid JSON — no explanation, no markdown, just the JSON object.`;
@@ -699,15 +783,21 @@ function OnboardingScreen({ data, update, onComplete }) {
     setLoading(true);
     if (phaseNum === 1) {
       const sa = await generateSelfAwareness(data.p1);
-      update(d => ({ ...d, selfAwareness: sa }));
+      // Dùng fallback nếu AI không khả dụng — không để null
+      update(d => ({ ...d, selfAwareness: sa || fallbackSelfAwareness(data.p1) }));
       setPhase(2);
     } else if (phaseNum === 2) {
       const ik = await generateIkigai(data.p1, data.p2, data.selfAwareness);
-      update(d => ({ ...d, ikigai: ik }));
+      update(d => ({ ...d, ikigai: ik || fallbackIkigai(data.p1, data.p2) }));
       setPhase(3);
     } else {
       const rt = await generateRoutines(data.p1, data.p3, data.selfAwareness);
-      update(d => ({ ...d, routines: rt, onboarding: { ...d.onboarding, completed: true }, ui: { screen: "onboarding-result" } }));
+      update(d => ({
+        ...d,
+        routines: rt || fallbackRoutines(data.p3),
+        onboarding: { ...d.onboarding, completed: true },
+        ui: { screen: "onboarding-result" },
+      }));
     }
     setLoading(false);
   };
@@ -1021,6 +1111,14 @@ function HomeScreen({ data, update, setScreen }) {
   const { ikigai, selfAwareness: sa, today, gamification, routines } = data;
   const doneTasks = today.tasks.filter(t => t.done).length;
   const taskPct = (doneTasks / 3) * 100;
+  const [showReset, setShowReset] = useState(false);
+
+  const handleReset = () => {
+    if (window.confirm("Reset toàn bộ dữ liệu và bắt đầu lại từ đầu?")) {
+      localStorage.removeItem(STORAGE_KEY);
+      window.location.reload();
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -1032,10 +1130,21 @@ function HomeScreen({ data, update, setScreen }) {
             {data.user.name || "Bạn"} 👋
           </h1>
         </div>
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-          <Flame size={14} style={{ color: C.amber }} />
-          <span className="text-sm font-bold" style={{ color: C.amber }}>{gamification.streak}</span>
-          <span className="text-xs" style={{ color: C.muted }}>ngày</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+            <Flame size={14} style={{ color: C.amber }} />
+            <span className="text-sm font-bold" style={{ color: C.amber }}>{gamification.streak}</span>
+            <span className="text-xs" style={{ color: C.muted }}>ngày</span>
+          </div>
+          {/* Nút Reset để test lại từ đầu */}
+          <button
+            onClick={handleReset}
+            title="Reset & test lại từ đầu"
+            className="rounded-xl px-3 py-2 text-xs transition-all hover:opacity-80"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.muted }}
+          >
+            ↺ Reset
+          </button>
         </div>
       </div>
 
