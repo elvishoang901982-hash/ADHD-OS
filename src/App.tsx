@@ -1,1394 +1,1748 @@
-/**
- * ADHD OS — v4
- * 
- * 5 màn hình:
- *   1. REFLECT  — Phản tư sâu 3 vòng → Core Identity
- *   2. COMPASS  — North Star → 90 ngày → Tuần này
- *   3. TODAY    — Brain dump → AI lọc → 3 bước nhỏ
- *   4. COACH    — 3 tình huống bị kẹt cụ thể
- *   5. EVIDENCE — Nhật ký bằng chứng tiến bộ
- * 
- * AI: Claude API (claude-sonnet-4-20250514)
- * Data: localStorage (Supabase-ready)
- * 
- * THUẬT NGỮ:
- *   Brain dump    = Đổ hết suy nghĩ ra không lọc
- *   Executive Function = Khả năng lên kế hoạch & bắt đầu hành động
- *   Core Identity = Câu mô tả bạn là ai ở cốt lõi
- *   North Star    = Tầm nhìn dài hạn định hướng mọi quyết định
- *   Sprint        = Giai đoạn tập trung ngắn có mục tiêu rõ
- */
+"use client";
+
+// ============================================================
+// ADHD OS — Demo App v1
+// Design: Dark "Mission Control" — deep navy + amber
+// AI: 7 integration points via /api/chat proxy
+// Data: localStorage (schema mirrors Supabase for easy migration)
+// Deploy: Drop into src/app/page.jsx on existing Vercel project
+// ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Brain, Sun, Moon, Compass, Target, Flame, MessageCircle,
+  TrendingUp, ChevronRight, ChevronLeft, Check, Loader2,
+  Sparkles, Home, CalendarDays, Star, Zap, Eye, Heart,
+  RefreshCw, Send, Award, AlertTriangle, BarChart2, Clock,
+  CheckCircle2, Circle, ArrowRight, Minus, Plus, X
+} from "lucide-react";
 
-/* ══════════════════════════════════════════════════════════
-   DESIGN TOKENS — Warm dark, ink & amber
-══════════════════════════════════════════════════════════ */
+// ─── CONSTANTS ────────────────────────────────────────────────
+const STORAGE_KEY = "adhd-os-v1";
+const API = "/api/chat";
+
+// ─── COLOR TOKENS (matches CSS vars for easy theming) ─────────
 const C = {
-  bg:       "#0A0906",
-  surface:  "#111009",
-  card:     "#181510",
-  cardHi:   "#201C14",
-  border:   "#282010",
-  borderHi: "#382C18",
-  amber:    "#C8863A",
-  amberLo:  "#5A3A10",
-  amberHi:  "#E8A850",
-  amberGlow:"#C8863A22",
-  text:     "#EDE5D4",
-  textMid:  "#8A7A60",
-  textDim:  "#48402A",
-  green:    "#4A9660",
-  greenLo:  "#0A180E",
-  greenHi:  "#6ABB80",
-  blue:     "#4A7AAA",
-  blueLo:   "#0A1420",
-  red:      "#AA4A4A",
-  redLo:    "#1A0A0A",
+  bg:       "#030B1A",
+  surface:  "#0A1628",
+  elevated: "#0F1F38",
+  border:   "#1A2D4A",
+  amber:    "#F59E0B",
+  amberDim: "#92600A",
+  blue:     "#60A5FA",
+  teal:     "#22D3EE",
+  green:    "#34D399",
+  red:      "#F87171",
+  text:     "#F1F5F9",
+  muted:    "#64748B",
+  soft:     "#94A3B8",
 };
 
-/* ══════════════════════════════════════════════════════════
-   LOCAL STORAGE — Supabase-ready
-══════════════════════════════════════════════════════════ */
-// SUPABASE: thay thế bằng supabase.from('table').select/upsert
-const LS = {
-  get: (k, d = null) => {
-    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }
-    catch { return d; }
+// ─── DEFAULT DATA MODEL ───────────────────────────────────────
+// Schema mirrors the Supabase tables in the brief.
+// To migrate: replace localStorage calls with Supabase SDK calls.
+const DEFAULT = {
+  ui:   { screen: "welcome" },
+  user: { name: "", disclaimerAccepted: false },
+  onboarding: { completed: false, phase: 1, step: 0 },
+
+  // SPRINT 2 → Supabase: self_awareness_profiles table
+  p1: {
+    adhdStatus:  "diagnosed",
+    pains:       ["", "", ""],
+    strengths:   "",
+    triggers:    "",
+    sabotage:    "",
+    toDo:        "",
+    notToDo:     "",
+    toBe:        "",
   },
-  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
-  del: (k)    => { try { localStorage.removeItem(k); } catch {} },
+
+  // SPRINT 2 → Supabase: ikigai_profiles table
+  p2: {
+    meaning:      "",
+    problem:      "",
+    futureSelf:   "",
+    valueToOthers:"",
+    skills:       "",
+  },
+
+  // SPRINT 2 → Supabase: routines table
+  p3: {
+    wakeTime:  "06:30",
+    sleepTime: "23:00",
+    peakTime:  "morning",
+    fixedWork: "",
+    exercise:  "",
+  },
+
+  // AI-Generated — null until first onboarding complete
+  selfAwareness: null, // {strengths[], weaknesses[], triggers[], toDo[], notToDo[], toBe[], summary}
+  ikigai:        null, // {hypotheses[], recommendation, whyRecommended, manifesto, northStar, plan90d[], stopDoing[]}
+  routines:      null, // {morning[], work[], evening[], minimum[]}
+
+  // SPRINT 2 → Supabase: daily_checkins table
+  today: {
+    date:           "",
+    gratitude:      ["", "", ""],
+    energy:         5,
+    focus:          5,
+    desiredFeeling: "",
+    tasks: [
+      { id: 1, title: "", goal: "", minutes: 25, done: false, minimum: "" },
+      { id: 2, title: "", goal: "", minutes: 25, done: false, minimum: "" },
+      { id: 3, title: "", goal: "", minutes: 25, done: false, minimum: "" },
+    ],
+    aiNudge:     "",
+    morningDone: false,
+    // SPRINT 2 → Supabase: daily_checkouts table
+    evening: {
+      wins: "", offTrack: "", brainDump: "", tomorrowPrep: "", aiSummary: "", done: false,
+    },
+  },
+
+  // SPRINT 2 → Supabase: weekly_reviews table
+  weekly: { wins: "", misses: "", patterns: "", adjustments: "", generated: false },
+
+  // SPRINT 2 → Supabase: messages table
+  chat: [
+    { role: "assistant", content: "Tôi là AI Coach của bạn trong ADHD OS. Hỏi tôi bất cứ điều gì — về kế hoạch hôm nay, lúc lệch hướng, hay pattern bạn muốn hiểu sâu hơn." }
+  ],
+
+  // SPRINT 4 → Supabase: gamification_stats table
+  gamification: { streak: 0, score: 0, badges: [], lastDate: "" },
 };
 
-/* ══════════════════════════════════════════════════════════
-   CLAUDE API
-══════════════════════════════════════════════════════════ */
-async function askClaude(systemPrompt, messages, maxTokens = 600) {
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ systemPrompt, messages, maxTokens }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || "Lỗi kết nối API");
+// ─── STORAGE LAYER ────────────────────────────────────────────
+// SPRINT 2: Replace these two functions with Supabase SDK calls
+function load() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || DEFAULT; }
+  catch { return DEFAULT; }
+}
+function save(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch { console.error("Storage write failed"); }
+}
+
+// ─── AI LAYER ─────────────────────────────────────────────────
+// SPRINT 3: Extend callAI with streaming support for Coach Chat
+async function callAI(messages, systemPrompt) {
+  try {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-5",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages,
+      }),
+    });
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    const data = await res.json();
+    return data?.content?.[0]?.text || "";
+  } catch (err) {
+    console.error("AI call failed:", err);
+    return null;
   }
-  const data = await res.json();
-  return data.content.map(b => b.text || "").join("").trim();
 }
 
-// System prompt cốt lõi — inject profile vào mọi lần gọi AI
-function buildSystemPrompt(profile) {
-  const p = profile || {};
-  return `Bạn là AI Coach chuyên biệt cho người ADHD (Rối loạn tăng động giảm chú ý — Attention Deficit Hyperactivity Disorder).
-
-HIỂU VỀ NÃO ADHD:
-- Không phải lười biếng. Đây là vấn đề về Executive Function (khả năng khởi động & điều hướng hành động).
-- Não ADHD cần: rõ ràng tuyệt đối, bước nhỏ không thể từ chối, và bằng chứng tiến bộ liên tục.
-- Tránh: áp lực, phán xét, câu trả lời dài dòng, nhiều lựa chọn cùng lúc.
-
-THÔNG TIN VỀ NGƯỜI DÙNG:
-- Tên: ${p.name || "chưa có"}
-- Core Identity (Bản sắc cốt lõi): ${p.coreIdentity || "chưa xác định"}
-- North Star (Tầm nhìn dài hạn): ${p.northStar || "chưa xác định"}
-- Mục tiêu 90 ngày: ${p.goal90 || "chưa xác định"}
-- Điểm yếu chính: ${(p.struggles || []).join(", ") || "chưa biết"}
-
-QUY TẮC TRẢ LỜI:
-1. Tối đa 120 từ — não ADHD không đọc dài
-2. Luôn kết thúc bằng 1 hành động CỰC KỲ cụ thể
-3. Không hỏi nhiều hơn 1 câu một lúc
-4. Dùng tiếng Việt, giải thích thuật ngữ tiếng Anh khi cần
-5. Giọng: ấm áp, thực tế, không thuyết giảng
-6. Khi chia nhỏ việc: mỗi bước < 15 phút, bắt đầu bằng động từ cụ thể`;
+function safeParseJSON(text, fallback) {
+  try {
+    const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    return JSON.parse(clean);
+  } catch { return fallback; }
 }
 
-/* ══════════════════════════════════════════════════════════
-   GLOBAL STYLES
-══════════════════════════════════════════════════════════ */
-function GS() {
-  return (
-    <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,700;1,400&family=JetBrains+Mono:wght@400;500&family=Nunito:wght@300;400;500;600;700&display=swap');
+// AI Moment 1: Self-Awareness Analysis
+async function generateSelfAwareness(p1) {
+  const system = `You are a Self-Awareness Analyst for ADHD OS. Analyze the user's data and return ONLY valid JSON — no explanation, no markdown, just the JSON object.`;
+  const prompt = `Analyze this ADHD user profile and extract behavioral patterns. Be honest, not flattering.
 
-      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      html, body, #root { height: 100%; background: ${C.bg}; color: ${C.text}; }
-      textarea, input { font-family: 'Nunito', sans-serif; }
-      textarea { resize: none; }
-      ::-webkit-scrollbar { width: 2px; }
-      ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 1px; }
+ADHD Status: ${p1.adhdStatus}
+Biggest Pains: ${p1.pains.filter(Boolean).join(", ")}
+Natural Strengths: ${p1.strengths}
+Distraction Triggers: ${p1.triggers}
+Self-Sabotage Patterns: ${p1.sabotage}
+Should-Do List: ${p1.toDo}
+Should-Avoid List: ${p1.notToDo}
+Person They Want To Be: ${p1.toBe}
 
-      @keyframes fadeUp   { from { opacity:0; transform:translateY(16px) } to { opacity:1; transform:translateY(0) } }
-      @keyframes fadeIn   { from { opacity:0 } to { opacity:1 } }
-      @keyframes scaleIn  { from { opacity:0; transform:scale(.94) } to { opacity:1; transform:scale(1) } }
-      @keyframes pulse    { 0%,100%{ opacity:.2; transform:scale(.7) } 50%{ opacity:1; transform:scale(1) } }
-      @keyframes shimmer  { 0%{ background-position:200% 0 } 100%{ background-position:-200% 0 } }
-      @keyframes glow     { 0%,100%{ box-shadow:0 0 20px ${C.amberGlow} } 50%{ box-shadow:0 0 40px ${C.amberGlow} } }
-      @keyframes checkPop { 0%{transform:scale(0)} 60%{transform:scale(1.4)} 100%{transform:scale(1)} }
-      @keyframes slideIn  { from{transform:translateX(20px);opacity:0} to{transform:translateX(0);opacity:1} }
-
-      .fu  { animation: fadeUp  .5s cubic-bezier(.16,1,.3,1) both; }
-      .fi  { animation: fadeIn  .4s ease both; }
-      .si  { animation: scaleIn .4s cubic-bezier(.16,1,.3,1) both; }
-      .d1  { animation-delay: .06s; }
-      .d2  { animation-delay: .12s; }
-      .d3  { animation-delay: .18s; }
-      .d4  { animation-delay: .24s; }
-      .d5  { animation-delay: .30s; }
-
-      button { cursor: pointer; border: none; font-family: 'Nunito', sans-serif; transition: all .18s ease; }
-      button:active { transform: scale(.95) !important; }
-      button:disabled { opacity: .4; cursor: default; }
-      textarea:focus, input:focus { outline: none; border-color: ${C.amberLo} !important; }
-
-      .loading-dots span {
-        display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-        background: ${C.amber}; margin: 0 3px;
-        animation: pulse 1.4s ease infinite;
-      }
-      .loading-dots span:nth-child(2) { animation-delay: .2s; }
-      .loading-dots span:nth-child(3) { animation-delay: .4s; }
-    `}</style>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   PRIMITIVES
-══════════════════════════════════════════════════════════ */
-const mono = { fontFamily: "'JetBrains Mono', monospace" };
-const serif = { fontFamily: "'Playfair Display', serif" };
-
-function Tag({ children, color = C.amber, style = {} }) {
-  return (
-    <span style={{
-      ...mono, fontSize: "10px", letterSpacing: "2px", textTransform: "uppercase",
-      color, ...style
-    }}>{children}</span>
-  );
-}
-
-function Card({ children, style = {}, className = "", glow = false }) {
-  return (
-    <div className={className} style={{
-      background: C.card, border: `1px solid ${C.border}`,
-      borderRadius: "18px", padding: "20px",
-      ...(glow ? { animation: "glow 3s ease infinite", border: `1px solid ${C.amberLo}` } : {}),
-      ...style,
-    }}>{children}</div>
-  );
-}
-
-function Btn({ children, onClick, v = "primary", full = false, style = {}, disabled = false, size = "md" }) {
-  const sizes = { sm: "10px 16px", md: "13px 22px", lg: "16px 28px" };
-  const fonts = { sm: "13px", md: "15px", lg: "17px" };
-  const variants = {
-    primary: { background: `linear-gradient(135deg, ${C.amber}, ${C.amberLo})`, color: "#0A0906", fontWeight: 700 },
-    ghost:   { background: "transparent", border: `1.5px solid ${C.border}`, color: C.textMid },
-    green:   { background: C.greenLo, border: `1.5px solid ${C.green}44`, color: C.greenHi, fontWeight: 600 },
-    red:     { background: C.redLo, border: `1.5px solid ${C.red}44`, color: C.red },
-    amber:   { background: C.amberGlow, border: `1.5px solid ${C.amberLo}`, color: C.amberHi, fontWeight: 600 },
-  };
-  return (
-    <button disabled={disabled} onClick={disabled ? undefined : onClick} style={{
-      padding: sizes[size], borderRadius: "12px", fontSize: fonts[size],
-      width: full ? "100%" : "auto", ...variants[v], ...style,
-    }}>{children}</button>
-  );
-}
-
-function Divider({ color = C.border, margin = "20px 0" }) {
-  return <div style={{ height: "1px", background: color, margin }} />;
-}
-
-function Sp({ n = 1 }) {
-  return <div style={{ height: `${n * 12}px` }} />;
-}
-
-function Loading({ text = "Đang phân tích..." }) {
-  return (
-    <div style={{ textAlign: "center", padding: "40px 20px" }}>
-      <div className="loading-dots" style={{ marginBottom: "16px" }}>
-        <span /><span /><span />
-      </div>
-      <p style={{ color: C.textMid, fontSize: "14px" }}>{text}</p>
-    </div>
-  );
-}
-
-function ProgressBar({ value, max, color = C.amber }) {
-  return (
-    <div style={{ background: C.border, borderRadius: "4px", height: "4px", overflow: "hidden" }}>
-      <div style={{
-        height: "100%", width: `${(value / max) * 100}%`,
-        background: color, borderRadius: "4px", transition: "width .5s ease",
-      }} />
-    </div>
-  );
-}
-
-function StepDots({ total, current }) {
-  return (
-    <div style={{ display: "flex", gap: "6px", justifyContent: "center", marginBottom: "32px" }}>
-      {Array.from({ length: total }).map((_, i) => (
-        <div key={i} style={{
-          height: "5px", borderRadius: "3px", transition: "all .35s ease",
-          width: i === current ? "24px" : "5px",
-          background: i <= current ? C.amber : C.border,
-          opacity: i < current ? 0.4 : 1,
-        }} />
-      ))}
-    </div>
-  );
-}
-
-
-/* ══════════════════════════════════════════════════════════
-   SCREEN 1 — REFLECT (Phản tư sâu 3 vòng)
-══════════════════════════════════════════════════════════ */
-const REFLECT_ROUNDS = [
-  {
-    id: "past",
-    title: "Quá khứ",
-    icon: "◎",
-    color: C.blue,
-    intro: "Nhìn lại để hiểu bạn là ai thật sự — không phải bạn muốn người khác thấy gì.",
-    questions: [
-      { q: "Khi nào trong cuộc sống bạn cảm thấy 'mình nhất' — tràn đầy năng lượng và đúng chỗ?", ph: "Có thể là một khoảnh khắc nhỏ, một dự án, một ngày..." },
-      { q: "Điều gì bạn đã làm được mà chính bạn cũng bất ngờ về bản thân?", ph: "Dù nhỏ cũng kể..." },
-    ]
-  },
-  {
-    id: "present",
-    title: "Hiện tại",
-    icon: "◉",
-    color: C.amber,
-    intro: "Não ADHD thường chạy ở 'chế độ nền' — nhiều thứ đang chiếm không gian mà bạn chưa nhận ra.",
-    questions: [
-      { q: "Điều gì đang chiếm não bạn nhiều nhất lúc này — kể cả những thứ bạn cố không nghĩ đến?", ph: "Đổ hết ra — không cần logic, không cần thứ tự..." },
-      { q: "Nếu giải quyết được 1 thứ trong danh sách đó, cuộc sống sẽ nhẹ hơn bao nhiêu?", ph: "Thứ nào nặng nhất?..." },
-    ]
-  },
-  {
-    id: "future",
-    title: "Tương lai",
-    icon: "◈",
-    color: C.green,
-    intro: "Không hỏi mục tiêu. Hỏi ước mơ — thứ não ADHD hay bị vùi lấp bởi lo lắng hàng ngày.",
-    questions: [
-      { q: "Nếu không sợ thất bại, không lo người khác nghĩ gì — bạn sẽ dành thời gian cho điều gì?", ph: "Thứ gì khiến bạn hứng khởi nhất khi tưởng tượng?..." },
-      { q: "10 năm nữa, bạn muốn người thân nói gì về bạn?", ph: "Không phải về thành tích — về con người bạn là..." },
-    ]
-  }
-];
-
-function ReflectScreen({ profile, onComplete }) {
-  const [phase, setPhase] = useState("intro"); // intro | round | thinking | result
-  const [roundIdx, setRoundIdx] = useState(0);
-  const [qIdx, setQIdx] = useState(0);
-  const [answers, setAnswers] = useState({ past: [], present: [], future: [] });
-  const [input, setInput] = useState("");
-  const [name, setName] = useState(profile?.name || "");
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const taRef = useRef();
-
-  const round = REFLECT_ROUNDS[roundIdx];
-  const totalQ = REFLECT_ROUNDS.reduce((s, r) => s + r.questions.length, 0);
-  const doneQ = REFLECT_ROUNDS.slice(0, roundIdx).reduce((s, r) => s + r.questions.length, 0) + qIdx;
-
-  useEffect(() => { if (phase === "round") taRef.current?.focus(); }, [phase, roundIdx, qIdx]);
-
-  const nextQuestion = () => {
-    const key = round.id;
-    const updated = { ...answers, [key]: [...(answers[key] || []), input] };
-    setAnswers(updated);
-    setInput("");
-
-    if (qIdx < round.questions.length - 1) {
-      setQIdx(i => i + 1);
-    } else if (roundIdx < REFLECT_ROUNDS.length - 1) {
-      setRoundIdx(i => i + 1);
-      setQIdx(0);
-    } else {
-      synthesize(updated);
-    }
-  };
-
-  const synthesize = async (allAnswers) => {
-    setLoading(true); setPhase("thinking"); setError("");
-    try {
-      const sys = `Bạn là AI Coach chuyên về ADHD. Phân tích câu trả lời phản tư để tổng hợp Core Identity (Bản sắc cốt lõi) của người dùng.
-
-Trả lời CHÍNH XÁC theo format JSON sau, không thêm gì khác:
+Return this JSON (max 5 items per array, Vietnamese language):
 {
-  "coreIdentity": "1 câu duy nhất mô tả họ là ai ở cốt lõi",
-  "superpower": "Điểm mạnh ẩn của họ (1 câu)",
-  "pattern": "Pattern (khuôn mẫu) tích cực lặp đi lặp lại trong câu trả lời",
-  "northStarHint": "Gợi ý về North Star dựa trên những gì họ chia sẻ",
-  "affirmation": "1 câu xác nhận ấm áp, cụ thể — không sáo rỗng"
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "triggers": ["..."],
+  "toDo": ["..."],
+  "notToDo": ["..."],
+  "toBe": ["..."],
+  "summary": "2-3 câu mô tả pattern hành vi thực sự — không tâng bốc, chỉ ra điểm nghẽn thật"
 }`;
-
-      const content = `Tên: ${name}
-
-QUÁ KHỨ:
-${allAnswers.past.map((a, i) => `${i + 1}. ${a}`).join("\n")}
-
-HIỆN TẠI:
-${allAnswers.present.map((a, i) => `${i + 1}. ${a}`).join("\n")}
-
-TƯƠNG LAI:
-${allAnswers.future.map((a, i) => `${i + 1}. ${a}`).join("\n")}`;
-
-      const raw = await askClaude(sys, [{ role: "user", content }], 500);
-      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
-      setResult(json);
-      setPhase("result");
-    } catch (e) {
-      setError("Lỗi: " + e.message);
-      setPhase("round");
-    }
-    setLoading(false);
-  };
-
-  const finish = () => {
-    const updated = {
-      ...profile,
-      name,
-      reflectAnswers: answers,
-      coreIdentity: result.coreIdentity,
-      superpower: result.superpower,
-      reflectDone: true,
-    };
-    LS.set("adhd_profile", updated);
-    onComplete(updated, result.northStarHint);
-  };
-
-  if (phase === "intro") return (
-    <Screen center>
-      <div className="fu" style={{ maxWidth: "360px", textAlign: "center" }}>
-        <div style={{ fontSize: "48px", marginBottom: "20px" }}>🪞</div>
-        <h1 style={{ ...serif, fontSize: "32px", color: C.text, marginBottom: "12px", fontWeight: 700 }}>
-          Phản Tư
-        </h1>
-        <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.8, marginBottom: "8px" }}>
-          <em style={{ color: C.amber }}>Reflect</em> — Bước đầu tiên không phải đặt mục tiêu.
-        </p>
-        <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.8, marginBottom: "28px" }}>
-          Là hiểu bạn đang đứng ở đâu, bạn là ai — và điều gì thật sự quan trọng với bạn.
-        </p>
-
-        <Card style={{ marginBottom: "24px", textAlign: "left" }}>
-          {REFLECT_ROUNDS.map((r, i) => (
-            <div key={r.id} style={{
-              display: "flex", gap: "12px", alignItems: "flex-start",
-              padding: "10px 0", borderBottom: i < 2 ? `1px solid ${C.border}` : "none",
-            }}>
-              <span style={{ color: r.color, fontSize: "18px", marginTop: "2px" }}>{r.icon}</span>
-              <div>
-                <p style={{ color: C.text, fontSize: "14px", fontWeight: 600 }}>Vòng {i + 1}: {r.title}</p>
-                <p style={{ color: C.textMid, fontSize: "12px", marginTop: "2px", lineHeight: 1.5 }}>{r.intro}</p>
-              </div>
-            </div>
-          ))}
-        </Card>
-
-        <div style={{ marginBottom: "20px" }}>
-          <Tag style={{ display: "block", marginBottom: "8px", textAlign: "left" }}>Bạn tên gì?</Tag>
-          <input value={name} onChange={e => setName(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && name.trim() && setPhase("round")}
-            placeholder="Tên hoặc biệt danh..."
-            style={{
-              width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-              borderRadius: "12px", padding: "13px 16px", color: C.text, fontSize: "15px",
-            }} />
-        </div>
-
-        <Btn full onClick={() => setPhase("round")} disabled={!name.trim()} size="lg">
-          Bắt đầu phản tư →
-        </Btn>
-        <p style={{ color: C.textDim, fontSize: "12px", marginTop: "12px" }}>
-          6 câu hỏi · ~10 phút · không có câu trả lời sai
-        </p>
-      </div>
-    </Screen>
-  );
-
-  if (phase === "round") return (
-    <Screen scrollable>
-      <div style={{ maxWidth: "480px", width: "100%", padding: "0 4px" }}>
-        {/* Progress */}
-        <div style={{ marginBottom: "24px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-            <Tag color={round.color}>Vòng {roundIdx + 1}: {round.title}</Tag>
-            <Tag>{doneQ}/{totalQ}</Tag>
-          </div>
-          <ProgressBar value={doneQ} max={totalQ} color={round.color} />
-        </div>
-
-        <div key={`${roundIdx}-${qIdx}`} className="fu">
-          {/* Round intro */}
-          {qIdx === 0 && (
-            <div style={{
-              background: `${round.color}10`, border: `1px solid ${round.color}30`,
-              borderRadius: "14px", padding: "16px", marginBottom: "20px",
-            }}>
-              <span style={{ fontSize: "24px" }}>{round.icon}</span>
-              <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7, marginTop: "8px" }}>{round.intro}</p>
-            </div>
-          )}
-
-          <div style={{ marginBottom: "20px" }}>
-            <Tag style={{ marginBottom: "12px", display: "block" }}>Câu {doneQ + 1}</Tag>
-            <h2 style={{ ...serif, color: C.text, fontSize: "clamp(17px,4.5vw,21px)", lineHeight: 1.6, fontWeight: 500 }}>
-              {round.questions[qIdx].q}
-            </h2>
-          </div>
-
-          <textarea ref={taRef} value={input} onChange={e => setInput(e.target.value)}
-            placeholder={round.questions[qIdx].ph} rows={5}
-            style={{
-              width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-              borderRadius: "14px", padding: "16px", color: C.text, fontSize: "15px",
-              lineHeight: 1.8, marginBottom: "16px",
-            }} />
-
-          {error && <p style={{ color: C.red, fontSize: "13px", marginBottom: "12px" }}>{error}</p>}
-
-          <div style={{ display: "flex", gap: "10px" }}>
-            {(roundIdx > 0 || qIdx > 0) && (
-              <Btn v="ghost" onClick={() => {
-                if (qIdx > 0) setQIdx(i => i - 1);
-                else { setRoundIdx(i => i - 1); setQIdx(REFLECT_ROUNDS[roundIdx - 1].questions.length - 1); }
-                setInput("");
-              }} style={{ flex: 1 }}>← Lại</Btn>
-            )}
-            <Btn onClick={nextQuestion} disabled={!input.trim() || loading} style={{ flex: 2 }}>
-              {doneQ + 1 >= totalQ ? "Hoàn thành ✓" : "Tiếp →"}
-            </Btn>
-          </div>
-
-          <p style={{ color: C.textDim, fontSize: "11px", textAlign: "center", marginTop: "12px" }}>
-            Viết thật lòng — không có câu trả lời đúng hay sai
-          </p>
-        </div>
-      </div>
-    </Screen>
-  );
-
-  if (phase === "thinking") return (
-    <Screen center>
-      <Loading text="AI đang phân tích câu trả lời của bạn..." />
-    </Screen>
-  );
-
-  if (phase === "result" && result) return (
-    <Screen scrollable>
-      <div style={{ maxWidth: "480px", width: "100%", padding: "0 4px" }}>
-        <div className="fu" style={{ textAlign: "center", marginBottom: "28px" }}>
-          <div style={{ fontSize: "36px", marginBottom: "12px" }}>✦</div>
-          <h2 style={{ ...serif, color: C.text, fontSize: "26px", marginBottom: "6px" }}>Bản sắc cốt lõi</h2>
-          <p style={{ color: C.textMid, fontSize: "13px" }}>
-            <em>Core Identity</em> — tổng hợp từ phản tư của {name}
-          </p>
-        </div>
-
-        {/* Core Identity */}
-        <Card className="fu d1" glow style={{ marginBottom: "12px", border: `1px solid ${C.amberLo}` }}>
-          <Tag color={C.amber} style={{ marginBottom: "10px", display: "block" }}>✦ Core Identity — Bản sắc cốt lõi</Tag>
-          <p style={{ ...serif, color: C.amberHi, fontSize: "20px", lineHeight: 1.65, fontStyle: "italic" }}>
-            "{result.coreIdentity}"
-          </p>
-        </Card>
-
-        <div className="fu d2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
-          <Card>
-            <Tag style={{ marginBottom: "8px", display: "block" }}>Superpower</Tag>
-            <p style={{ color: C.text, fontSize: "13px", lineHeight: 1.6 }}>{result.superpower}</p>
-          </Card>
-          <Card>
-            <Tag style={{ marginBottom: "8px", display: "block" }}>Pattern</Tag>
-            <p style={{ color: C.text, fontSize: "13px", lineHeight: 1.6 }}>{result.pattern}</p>
-          </Card>
-        </div>
-
-        <Card className="fu d3" style={{ marginBottom: "12px", background: C.greenLo, border: `1px solid ${C.green}33` }}>
-          <Tag color={C.green} style={{ marginBottom: "8px", display: "block" }}>Xác nhận</Tag>
-          <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.75, ...serif, fontStyle: "italic" }}>
-            "{result.affirmation}"
-          </p>
-        </Card>
-
-        <Card className="fu d4" style={{ marginBottom: "24px" }}>
-          <Tag style={{ marginBottom: "8px", display: "block" }}>North Star — gợi ý</Tag>
-          <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7 }}>{result.northStarHint}</p>
-        </Card>
-
-        <div className="fu d5">
-          <Btn full onClick={finish} size="lg">
-            Tiếp theo: Xác định hướng đi →
-          </Btn>
-        </div>
-      </div>
-    </Screen>
-  );
-
-  return null;
+  const text = await callAI([{ role: "user", content: prompt }], system);
+  if (!text) return null;
+  return safeParseJSON(text, null);
 }
 
-/* ══════════════════════════════════════════════════════════
-   SCREEN 2 — COMPASS (Hướng đi)
-══════════════════════════════════════════════════════════ */
-function CompassScreen({ profile, onComplete }) {
-  const [phase, setPhase] = useState("intro");
-  const [northStar, setNorthStar] = useState(profile?.northStar || "");
-  const [goal90, setGoal90] = useState(profile?.goal90 || "");
-  const [weekFocus, setWeekFocus] = useState(profile?.weekFocus || "");
-  const [aiSuggestion, setAiSuggestion] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [doubt, setDoubt] = useState(false);
-  const [doubtInput, setDoubtInput] = useState("");
-  const [doubtReply, setDoubtReply] = useState("");
+// AI Moment 2: Ikigai / North Star Generation
+async function generateIkigai(p1, p2, sa) {
+  const system = `You are an Ikigai Strategist for ADHD OS. Return ONLY valid JSON — no explanation, no markdown.`;
+  const prompt = `Generate a personalized Ikigai analysis for this ADHD user.
 
-  const getAiSuggestion = async () => {
-    setLoading(true);
-    try {
-      const sys = buildSystemPrompt(profile);
-      const msg = `Dựa vào Core Identity "${profile.coreIdentity}" và gợi ý "${profile?.northStarHint || ""}", hãy đề xuất:
-1. North Star (1 câu, cụ thể, có thể đo được sau 10 năm)
-2. Mục tiêu 90 ngày (1 câu, cụ thể, có thể đạt được)
-3. Focus tuần này (1 việc duy nhất)
+Self-awareness summary: ${sa?.summary || ""}
+Key strengths: ${sa?.strengths?.join(", ") || ""}
+Key weaknesses: ${sa?.weaknesses?.join(", ") || ""}
+What gives them meaning: ${p2.meaning}
+Recurring problem they care about: ${p2.problem}
+Future self vision: ${p2.futureSelf}
+Value others see in them: ${p2.valueToOthers}
+Current skills: ${p2.skills}
 
-Format: JSON với keys: northStar, goal90, weekFocus`;
-      const raw = await askClaude(sys, [{ role: "user", content: msg }], 400);
-      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
-      setNorthStar(json.northStar || "");
-      setGoal90(json.goal90 || "");
-      setWeekFocus(json.weekFocus || "");
-      setAiSuggestion("Đây là gợi ý dựa trên phản tư của bạn. Chỉnh sửa cho đúng với bạn nhất.");
-    } catch (e) {
-      setAiSuggestion("Không lấy được gợi ý — bạn có thể tự điền.");
-    }
-    setLoading(false);
-    setPhase("edit");
-  };
+IMPORTANT: 
+- Find contradictions in their answers and name them honestly
+- Hypotheses must be testable with a concrete 7-14 day action
+- Do NOT just summarize what they said — synthesize and challenge
+- North Star must be specific and measurable for 1 year
+- All text in Vietnamese
 
-  const askAboutDoubt = async () => {
-    setLoading(true);
-    try {
-      const sys = buildSystemPrompt({ ...profile, northStar, goal90 });
-      const reply = await askClaude(sys, [{ role: "user", content: `Tôi không chắc về hướng này vì: ${doubtInput}\nHãy giúp tôi làm rõ.` }], 300);
-      setDoubtReply(reply);
-    } catch (e) { setDoubtReply("Không kết nối được AI."); }
-    setLoading(false);
-    setDoubt(false);
-  };
-
-  const save = () => {
-    const updated = { ...profile, northStar, goal90, weekFocus, compassDone: true };
-    LS.set("adhd_profile", updated);
-    LS.set("north_star", northStar);
-    LS.set("goal_90", goal90);
-    LS.set("week_focus", weekFocus);
-    onComplete(updated);
-  };
-
-  if (phase === "intro") return (
-    <Screen center>
-      <div className="fu" style={{ maxWidth: "360px", textAlign: "center" }}>
-        <div style={{ fontSize: "48px", marginBottom: "20px" }}>🧭</div>
-        <h1 style={{ ...serif, fontSize: "32px", color: C.text, marginBottom: "12px" }}>Compass</h1>
-        <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.8, marginBottom: "24px" }}>
-          <em style={{ color: C.amber }}>Compass — La bàn</em><br />
-          Từ Core Identity, AI giúp bạn xác định 3 tầng mục tiêu rõ ràng.
-        </p>
-        <Card style={{ textAlign: "left", marginBottom: "24px" }}>
-          {[
-            ["🌟", "North Star", "Tầm nhìn 10 năm — định hướng mọi quyết định"],
-            ["⚡", "Sprint 90 ngày", "Mục tiêu cụ thể trong 90 ngày tới"],
-            ["🎯", "Focus tuần này", "1 việc duy nhất quan trọng nhất tuần này"],
-          ].map(([icon, title, desc], i) => (
-            <div key={i} style={{ display: "flex", gap: "12px", padding: "10px 0", borderBottom: i < 2 ? `1px solid ${C.border}` : "none" }}>
-              <span style={{ fontSize: "18px" }}>{icon}</span>
-              <div>
-                <p style={{ color: C.text, fontSize: "14px", fontWeight: 600 }}>{title}</p>
-                <p style={{ color: C.textMid, fontSize: "12px", marginTop: "2px" }}>{desc}</p>
-              </div>
-            </div>
-          ))}
-        </Card>
-        {loading ? <Loading text="AI đang xây Compass..." /> : (
-          <Btn full onClick={getAiSuggestion} size="lg">AI gợi ý dựa trên phản tư →</Btn>
-        )}
-      </div>
-    </Screen>
-  );
-
-  if (phase === "edit") return (
-    <Screen scrollable>
-      <div style={{ maxWidth: "480px", width: "100%" }}>
-        <div className="fu" style={{ marginBottom: "24px" }}>
-          <h2 style={{ ...serif, color: C.text, fontSize: "24px", marginBottom: "6px" }}>La bàn của {profile.name}</h2>
-          {aiSuggestion && <p style={{ color: C.amberHi, fontSize: "13px", lineHeight: 1.6 }}>{aiSuggestion}</p>}
-        </div>
-
-        {[
-          { key: "northStar", val: northStar, set: setNorthStar, label: "🌟 North Star (10 năm)", tag: "Tầm nhìn dài hạn", color: C.amber, ph: "Tôi muốn trở thành..." },
-          { key: "goal90", val: goal90, set: setGoal90, label: "⚡ Sprint 90 ngày", tag: "Sprint = giai đoạn tập trung có mục tiêu rõ", color: C.blue, ph: "Trong 90 ngày tới tôi sẽ..." },
-          { key: "weekFocus", val: weekFocus, set: setWeekFocus, label: "🎯 Focus tuần này", tag: "1 việc duy nhất", color: C.green, ph: "Tuần này tôi tập trung vào..." },
-        ].map((item, i) => (
-          <Card key={item.key} className={`fu d${i + 1}`} style={{ marginBottom: "12px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-              <Tag color={item.color}>{item.label}</Tag>
-            </div>
-            <p style={{ color: C.textDim, fontSize: "11px", marginBottom: "8px" }}>{item.tag}</p>
-            <textarea value={item.val} onChange={e => item.set(e.target.value)}
-              placeholder={item.ph} rows={2}
-              style={{
-                width: "100%", background: C.surface, border: `1px solid ${C.border}`,
-                borderRadius: "10px", padding: "12px 14px", color: C.text, fontSize: "14px", lineHeight: 1.7,
-              }} />
-          </Card>
-        ))}
-
-        {doubtReply && (
-          <Card className="fu" style={{ marginBottom: "12px", background: C.blueLo, border: `1px solid ${C.blue}33` }}>
-            <Tag color={C.blue} style={{ marginBottom: "8px", display: "block" }}>Coach giải đáp</Tag>
-            <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.75 }}>{doubtReply}</p>
-          </Card>
-        )}
-
-        <div className="fu d4" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <Btn v="ghost" full onClick={() => setDoubt(true)}>
-            🤔 Tôi không chắc hướng này đúng không
-          </Btn>
-          <Btn full onClick={save} disabled={!northStar.trim() || !goal90.trim()} size="lg">
-            Lưu Compass →
-          </Btn>
-        </div>
-
-        {doubt && (
-          <div className="si" style={{ position: "fixed", inset: 0, background: "#0A090688", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100, padding: "20px" }}>
-            <Card style={{ width: "100%", maxWidth: "480px" }}>
-              <Tag style={{ marginBottom: "12px", display: "block" }}>Chia sẻ với Coach</Tag>
-              <textarea value={doubtInput} onChange={e => setDoubtInput(e.target.value)}
-                placeholder="Tôi không chắc vì..." rows={3}
-                style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "12px", color: C.text, fontSize: "14px", lineHeight: 1.7, marginBottom: "12px" }} />
-              <div style={{ display: "flex", gap: "10px" }}>
-                <Btn v="ghost" onClick={() => setDoubt(false)} style={{ flex: 1 }}>Hủy</Btn>
-                <Btn onClick={askAboutDoubt} disabled={!doubtInput.trim() || loading} style={{ flex: 2 }}>
-                  {loading ? "Đang hỏi..." : "Hỏi Coach →"}
-                </Btn>
-              </div>
-            </Card>
-          </div>
-        )}
-      </div>
-    </Screen>
-  );
-
-  return null;
+Return JSON:
+{
+  "hypotheses": [
+    { "title": "...", "fit": "1-2 câu tại sao phù hợp", "risk": "1 câu rủi ro thật", "test": "Hành động kiểm chứng trong 7-14 ngày" },
+    { "title": "...", "fit": "...", "risk": "...", "test": "..." },
+    { "title": "...", "fit": "...", "risk": "...", "test": "..." }
+  ],
+  "recommendation": "title của hypothesis được chọn",
+  "whyRecommended": "2 câu lý do — gắn với nỗi đau thật và điểm mạnh thật",
+  "manifesto": "1 câu tuyên ngôn mạnh, cá nhân, không sáo rỗng",
+  "northStar": "North Star 1 năm cụ thể, đo được",
+  "plan90d": ["hành động 1", "hành động 2", "hành động 3"],
+  "stopDoing": ["việc 1 cần dừng", "việc 2 cần dừng", "việc 3 cần dừng"]
+}`;
+  const text = await callAI([{ role: "user", content: prompt }], system);
+  if (!text) return null;
+  return safeParseJSON(text, null);
 }
 
-/* ══════════════════════════════════════════════════════════
-   SCREEN 3 — TODAY (Brain dump → AI lọc → 3 bước)
-══════════════════════════════════════════════════════════ */
-const EL = [
-  { v: 1, e: "😴", label: "Cạn kiệt",   tip: "1 bước 5 phút là đủ hôm nay.",          color: C.red    },
-  { v: 2, e: "😕", label: "Thấp",        tip: "Chọn việc nhỏ nhất có thể bắt đầu.",    color: "#AA6A3A" },
-  { v: 3, e: "😐", label: "Bình thường", tip: "Tập trung vào 1 việc quan trọng nhất.", color: C.textMid},
-  { v: 4, e: "🙂", label: "Tốt",         tip: "Tận dụng — làm việc khó ngay bây giờ.", color: C.blue   },
-  { v: 5, e: "🔥", label: "Cao điểm",    tip: "Thời điểm vàng. Đừng lãng phí.",        color: C.amber  },
-];
+// AI Moment 3: Routine Builder
+async function generateRoutines(p1, p3, sa) {
+  const system = `You are a Routine Builder for ADHD OS. Return ONLY valid JSON — no explanation.`;
+  const prompt = `Build a realistic daily routine for this ADHD user. The routine must be achievable, not ideal.
 
-function TodayScreen({ profile, onWin }) {
-  const todayKey = new Date().toLocaleDateString("vi-VN");
-  const [phase, setPhase] = useState(() => {
-    if (LS.get("today_done_" + todayKey)) return "done";
-    if (LS.get("today_steps_" + todayKey)) return "steps";
-    if (LS.get("today_task_" + todayKey)) return "task";
-    return "energy";
-  });
-  const [energy, setEnergy]   = useState(() => LS.get("today_energy_" + todayKey, 0));
-  const [dump,   setDump]     = useState(() => LS.get("today_dump_"   + todayKey, ""));
-  const [task,   setTask]     = useState(() => LS.get("today_task_"   + todayKey, ""));
-  const [steps,  setSteps]    = useState(() => LS.get("today_steps_"  + todayKey, []));
-  const [curStep,setCurStep]  = useState(() => LS.get("today_step_cur_" + todayKey, 0));
-  const [loading, setLoading] = useState(false);
-  const [aiExplain, setAiExplain] = useState("");
-  const taRef = useRef();
+Wake time: ${p3.wakeTime} | Sleep time: ${p3.sleepTime}
+Peak energy time: ${p3.peakTime}
+Fixed commitments: ${p3.fixedWork}
+Exercise habits: ${p3.exercise}
+Main triggers: ${sa?.triggers?.join(", ") || p1.triggers}
+Self-sabotage: ${p1.sabotage}
 
-  useEffect(() => {
-    if (phase === "dump") taRef.current?.focus();
-  }, [phase]);
+Rules:
+- Each item must have a CLEAR PURPOSE (not generic)
+- Minimum version must be genuinely doable on bad days (max 3 items, max 20 min total)
+- Morning: light cognitive load, not heroic tasks
+- All text in Vietnamese
 
-  const selectEnergy = (v) => {
-    setEnergy(v); LS.set("today_energy_" + todayKey, v);
-    setPhase("dump");
+Return JSON:
+{
+  "morning": [{"title": "...", "minutes": N, "purpose": "..."}],
+  "work": [{"title": "...", "minutes": N, "purpose": "..."}],
+  "evening": [{"title": "...", "minutes": N, "purpose": "..."}],
+  "minimum": [{"title": "...", "minutes": N, "purpose": "..."}]
+}`;
+  const text = await callAI([{ role: "user", content: prompt }], system);
+  if (!text) return null;
+  return safeParseJSON(text, null);
+}
+
+// AI Moment 4: Morning Nudge
+async function generateMorningNudge(today, ikigai, sa) {
+  const taskLoad = today.tasks.reduce((s, t) => s + (Number(t.minutes) || 0), 0);
+  const filledTasks = today.tasks.filter(t => t.title.trim()).length;
+  const system = `You are an ADHD Morning Coach. Give a SHORT, direct nudge (2-3 sentences max). No fluff.`;
+  const prompt = `User's morning state:
+Energy: ${today.energy}/10 | Focus: ${today.focus}/10
+Tasks planned: ${filledTasks}/3 (${taskLoad} min total)
+North Star: ${ikigai?.northStar || "chưa xác định"}
+Known triggers: ${sa?.triggers?.slice(0,2).join(", ") || ""}
+Gratitude filled: ${today.gratitude.filter(Boolean).length}/3
+
+Give a 2-3 sentence coach nudge in Vietnamese. Be direct, not motivational-poster-like. If overloaded, say so. If underplanned, say so.`;
+  const text = await callAI([{ role: "user", content: prompt }], system);
+  return text || "Chốt được 3 việc rồi. Đừng tối ưu thêm — bắt đầu việc số 1 ngay.";
+}
+
+// AI Moment 5: Evening Summary
+async function generateEveningSummary(today, sa, ikigai) {
+  const doneTasks = today.tasks.filter(t => t.done).length;
+  const system = `You are an ADHD Evening Review Coach. Be honest, specific, and brief (3-4 sentences).`;
+  const prompt = `User's day:
+Tasks done: ${doneTasks}/3
+What went well: ${today.evening.wins}
+What caused derailment: ${today.evening.offTrack}
+Brain dump: ${today.evening.brainDump}
+Tomorrow prep: ${today.evening.tomorrowPrep}
+Known self-sabotage patterns: ${sa?.weaknesses?.slice(0,2).join(", ") || ""}
+
+Write 3-4 sentences in Vietnamese: what the data shows about today, one honest observation about pattern, one specific thing to try tomorrow. No false positivity.`;
+  const text = await callAI([{ role: "user", content: prompt }], system);
+  return text || "Dữ liệu hôm nay đã được ghi lại. Ngày mai, bắt đầu bằng đúng 1 việc trong 10 phút đầu tiên.";
+}
+
+// AI Moment 6: Weekly Review
+async function generateWeeklyReview(today, sa, ikigai, gamification) {
+  const system = `You are a Weekly Review Coach for ADHD. Return ONLY valid JSON.`;
+  const prompt = `Weekly review data:
+Consistency score: ${gamification.score}/100 | Streak: ${gamification.streak} days
+This week's wins: ${today.evening.wins}
+Main derailments: ${today.evening.offTrack}
+User's known weaknesses: ${sa?.weaknesses?.join(", ") || ""}
+North Star: ${ikigai?.northStar || ""}
+
+Return JSON (Vietnamese):
+{
+  "wins": "1-2 câu về điều làm tốt tuần này",
+  "misses": "1-2 câu về điều chưa làm tốt — thẳng thắn",
+  "patterns": "1 câu pattern quan sát được",
+  "adjustments": "1-2 điều cụ thể điều chỉnh tuần tới"
+}`;
+  const text = await callAI([{ role: "user", content: prompt }], system);
+  if (!text) return null;
+  return safeParseJSON(text, null);
+}
+
+// AI Moment 7: Coach Chat
+async function generateCoachReply(message, data) {
+  const { selfAwareness: sa, ikigai, today, gamification } = data;
+  const system = `You are an ADHD OS Coach. You have access to the user's profile and daily data. 
+Rules:
+- Respond in Vietnamese
+- Be direct and specific — not generic AI advice
+- Reference the user's actual data when possible
+- Max 3-4 sentences unless the user asks for more
+- If user is venting, acknowledge briefly then redirect to one actionable step
+- You can gently push back if data contradicts what user says`;
+
+  const context = `User context:
+Name: ${data.user.name}
+North Star: ${ikigai?.northStar || "chưa xác định"}
+Main weaknesses: ${sa?.weaknesses?.slice(0,3).join(", ") || ""}
+Known triggers: ${sa?.triggers?.slice(0,3).join(", ") || ""}
+Today's energy: ${today.energy}/10 | focus: ${today.focus}/10
+Tasks done today: ${today.tasks.filter(t=>t.done).length}/3
+Current streak: ${gamification.streak} ngày`;
+
+  const text = await callAI(
+    [{ role: "user", content: `${context}\n\nUser message: ${message}` }],
+    system
+  );
+  return text || "Hãy nói cụ thể hơn về điều bạn đang kẹt — việc gì, bước nào, và điều gì khiến bạn né nó.";
+}
+
+// ─── UI PRIMITIVES ────────────────────────────────────────────
+
+function Btn({ children, onClick, variant = "primary", disabled = false, className = "", small = false }) {
+  const base = `inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-all duration-200 cursor-pointer select-none ${small ? "px-3 py-1.5 text-sm" : "px-5 py-3 text-sm"}`;
+  const variants = {
+    primary:  `text-black hover:opacity-90 active:scale-95 ${disabled ? "opacity-40 cursor-not-allowed" : ""}`,
+    ghost:    `text-slate-400 hover:text-white hover:bg-white/5 active:scale-95`,
+    outline:  `border text-slate-300 hover:text-white hover:border-white/30 active:scale-95`,
+    danger:   `bg-red-500/10 text-red-400 hover:bg-red-500/20 active:scale-95`,
   };
-
-  const processdumps = async () => {
-    if (!dump.trim()) return;
-    setLoading(true);
-    LS.set("today_dump_" + todayKey, dump);
-    try {
-      const sys = buildSystemPrompt(profile);
-      const energyLabel = EL.find(e => e.v === energy)?.label || "bình thường";
-      const msg = `Năng lượng hôm nay: ${energyLabel}
-North Star: ${profile.northStar || ""}
-Mục tiêu 90 ngày: ${profile.goal90 || ""}
-
-Brain dump (mọi thứ đang trong đầu):
-${dump}
-
-Hãy:
-1. Xác định 1 việc QUAN TRỌNG NHẤT cần làm hôm nay (phù hợp với năng lượng ${energyLabel})
-2. Giải thích ngắn TẠI SAO đây là việc quan trọng nhất (1 câu)
-
-Format JSON: { "task": "việc cần làm", "why": "tại sao quan trọng nhất" }`;
-
-      const raw = await askClaude(sys, [{ role: "user", content: msg }], 300);
-      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
-      setTask(json.task); setAiExplain(json.why);
-      LS.set("today_task_" + todayKey, json.task);
-      setPhase("confirm");
-    } catch (e) { setAiExplain("Lỗi: " + e.message); }
-    setLoading(false);
+  const styles = {
+    primary: { background: disabled ? C.amberDim : C.amber },
+    ghost:   {},
+    outline: { borderColor: C.border },
+    danger:  {},
   };
-
-  const confirmTask = async (useTask) => {
-    setLoading(true);
-    try {
-      const sys = buildSystemPrompt(profile);
-      const energyLabel = EL.find(e => e.v === energy)?.label || "bình thường";
-      const msg = `Việc cần làm hôm nay: "${useTask}"
-Năng lượng: ${energyLabel}
-
-Chia thành đúng 3 bước cực kỳ nhỏ và cụ thể, mỗi bước:
-- Bắt đầu bằng động từ hành động
-- Có thể hoàn thành trong < 15 phút
-- Không cần điều kiện gì khác để bắt đầu
-
-Format JSON: { "steps": ["bước 1", "bước 2", "bước 3"] }`;
-
-      const raw = await askClaude(sys, [{ role: "user", content: msg }], 300);
-      const json = JSON.parse(raw.replace(/```json?|```/g, "").trim());
-      setSteps(json.steps); setCurStep(0);
-      LS.set("today_steps_" + todayKey, json.steps);
-      LS.set("today_step_cur_" + todayKey, 0);
-      setPhase("steps");
-    } catch (e) { console.error(e); }
-    setLoading(false);
-  };
-
-  const doneStep = () => {
-    const next = curStep + 1;
-    if (next >= steps.length) {
-      LS.set("today_done_" + todayKey, true);
-      onWin({ date: todayKey, task, energy, steps });
-      setPhase("done");
-    } else {
-      setCurStep(next);
-      LS.set("today_step_cur_" + todayKey, next);
-    }
-  };
-
-  const el = EL.find(e => e.v === energy);
-
   return (
-    <Screen scrollable>
-      {/* Header mini */}
-      <div className="fu" style={{ marginBottom: "20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <Tag color={C.amber} style={{ display: "block", marginBottom: "4px" }}>⚡ Hôm nay</Tag>
-            <p style={{ color: C.textDim, fontSize: "12px", ...mono }}>{todayKey}</p>
-          </div>
-          {el && (
-            <div style={{ textAlign: "right" }}>
-              <span style={{ fontSize: "22px" }}>{el.e}</span>
-              <p style={{ color: el.color, fontSize: "11px", marginTop: "2px" }}>{el.label}</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* North Star mini */}
-      {profile.northStar && (
-        <div className="fu d1" style={{
-          background: "#0C0A04", border: `1px solid ${C.amberLo}44`,
-          borderRadius: "12px", padding: "12px 16px", marginBottom: "16px",
-        }}>
-          <Tag color={C.amberLo} style={{ marginBottom: "5px", display: "block" }}>✦ North Star</Tag>
-          <p style={{ color: C.amber, fontSize: "13px", lineHeight: 1.65, ...serif, fontStyle: "italic",
-            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-            "{profile.northStar}"
-          </p>
-        </div>
-      )}
-
-      {/* PHASE: ENERGY */}
-      {phase === "energy" && (
-        <div className="fu d2">
-          <Card>
-            <Tag style={{ marginBottom: "14px", display: "block" }}>Bước 1 — Năng lượng hôm nay?</Tag>
-            <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.6, marginBottom: "16px" }}>
-              Não ADHD hoạt động khác nhau tùy theo mức năng lượng. Chọn thật lòng.
-            </p>
-            {EL.map(o => (
-              <button key={o.v} onClick={() => selectEnergy(o.v)} style={{
-                width: "100%", background: "transparent", border: `1px solid ${C.border}`,
-                borderRadius: "12px", padding: "13px 16px", marginBottom: "8px",
-                display: "flex", alignItems: "center", gap: "14px", textAlign: "left",
-              }}>
-                <span style={{ fontSize: "22px", flexShrink: 0 }}>{o.e}</span>
-                <div>
-                  <p style={{ color: C.text, fontSize: "14px", fontWeight: 600 }}>{o.label}</p>
-                  <p style={{ color: C.textMid, fontSize: "12px", marginTop: "1px" }}>{o.tip}</p>
-                </div>
-              </button>
-            ))}
-          </Card>
-        </div>
-      )}
-
-      {/* PHASE: BRAIN DUMP */}
-      {phase === "dump" && (
-        <div key="dump" className="fu">
-          <Card style={{ marginBottom: "14px", background: `${el?.color}08`, border: `1px solid ${el?.color}22` }}>
-            <p style={{ color: el?.color, fontSize: "13px" }}>
-              {el?.e} {el?.label} — {el?.tip}
-            </p>
-          </Card>
-          <Card>
-            <Tag style={{ marginBottom: "10px", display: "block" }}>Bước 2 — Brain Dump</Tag>
-            <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.7, marginBottom: "14px" }}>
-              <em style={{ color: C.textMid }}>Brain dump</em> = đổ hết mọi thứ đang trong đầu ra đây.
-              Không lọc, không sắp xếp. Cả việc lớn lẫn nhỏ, cả lo lắng lẫn kế hoạch.
-            </p>
-            <textarea ref={taRef} value={dump} onChange={e => setDump(e.target.value)}
-              placeholder={"Đổ hết ra đây...\n- Cần gọi lại cho khách hàng\n- Lo về bài viết chưa xong\n- Nhớ mua sữa\n- Cần đọc lại proposal\n- ..."}
-              rows={7}
-              style={{
-                width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-                borderRadius: "12px", padding: "14px 16px", color: C.text, fontSize: "14px",
-                lineHeight: 1.8, marginBottom: "14px",
-              }} />
-            {loading ? <Loading text="AI đang phân tích brain dump..." /> : (
-              <Btn full onClick={processdumps} disabled={!dump.trim()} size="lg">
-                AI lọc việc quan trọng nhất →
-              </Btn>
-            )}
-          </Card>
-        </div>
-      )}
-
-      {/* PHASE: CONFIRM TASK */}
-      {phase === "confirm" && (
-        <div key="confirm" className="fu">
-          <Card style={{ marginBottom: "14px", border: `1px solid ${C.amberLo}` }}>
-            <Tag color={C.amber} style={{ marginBottom: "10px", display: "block" }}>
-              AI chọn việc quan trọng nhất
-            </Tag>
-            <p style={{ ...serif, color: C.text, fontSize: "18px", lineHeight: 1.65, marginBottom: "12px", fontWeight: 500 }}>
-              {task}
-            </p>
-            {aiExplain && (
-              <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.6,
-                borderTop: `1px solid ${C.border}`, paddingTop: "12px", marginTop: "4px" }}>
-                Tại sao: {aiExplain}
-              </p>
-            )}
-          </Card>
-          {loading ? <Loading text="Đang chia nhỏ công việc..." /> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              <Btn full onClick={() => confirmTask(task)} size="lg">
-                Đúng — chia thành 3 bước nhỏ →
-              </Btn>
-              <Btn v="ghost" full onClick={() => setPhase("dump")}>
-                ← Điều chỉnh lại
-              </Btn>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* PHASE: STEPS */}
-      {phase === "steps" && (
-        <div key="steps" className="fu">
-          <Card style={{ marginBottom: "14px" }}>
-            <Tag style={{ marginBottom: "8px", display: "block" }}>Việc hôm nay</Tag>
-            <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.6 }}>{task}</p>
-          </Card>
-
-          <Tag style={{ marginBottom: "12px", display: "block" }}>3 bước nhỏ — mỗi bước &lt; 15 phút</Tag>
-
-          {steps.map((s, i) => {
-            const isDone = i < curStep;
-            const isCurrent = i === curStep;
-            return (
-              <div key={i} className={`fu d${i + 1}`} style={{
-                background: isDone ? C.greenLo : isCurrent ? C.cardHi : C.surface,
-                border: `1.5px solid ${isDone ? C.green + "44" : isCurrent ? C.amberLo : C.border}`,
-                borderRadius: "14px", padding: "16px", marginBottom: "10px",
-                opacity: isDone ? 0.6 : 1,
-              }}>
-                <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
-                  <div style={{
-                    width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
-                    background: isDone ? C.green : isCurrent ? C.amber : C.border,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: isDone ? "14px" : "12px", fontWeight: 700, color: "#0A0906",
-                    ...mono,
-                    animation: isDone ? "checkPop .4s ease" : "none",
-                  }}>
-                    {isDone ? "✓" : i + 1}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <p style={{
-                      color: isDone ? C.green : isCurrent ? C.text : C.textMid,
-                      fontSize: "15px", lineHeight: 1.65,
-                      textDecoration: isDone ? "line-through" : "none",
-                    }}>{s}</p>
-                    {isCurrent && (
-                      <p style={{ color: C.textDim, fontSize: "12px", marginTop: "6px" }}>
-                        ← Đang làm · ≤ 15 phút
-                      </p>
-                    )}
-                  </div>
-                </div>
-                {isCurrent && (
-                  <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: `1px solid ${C.border}` }}>
-                    <Btn full onClick={doneStep} v="green">
-                      {i < steps.length - 1 ? `Xong bước ${i + 1} → bước tiếp` : "Hoàn thành tất cả ✓"}
-                    </Btn>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* PHASE: DONE */}
-      {phase === "done" && (
-        <div key="done" className="fu" style={{ textAlign: "center" }}>
-          <div style={{ fontSize: "52px", marginBottom: "20px", animation: "checkPop .5s ease" }}>🏆</div>
-          <Card glow style={{ marginBottom: "16px" }}>
-            <p style={{ color: C.greenHi, fontSize: "16px", lineHeight: 1.65, ...serif, fontStyle: "italic" }}>
-              "{task}"
-            </p>
-            <Divider />
-            <p style={{ color: C.green, fontSize: "14px", lineHeight: 1.7 }}>
-              Bạn đã hoàn thành. Đây là bằng chứng —<br />
-              não ADHD của bạn <em>có thể</em> làm được.
-            </p>
-          </Card>
-          <Btn v="ghost" full onClick={() => setPhase("energy")}>
-            Làm thêm việc khác
-          </Btn>
-        </div>
-      )}
-    </Screen>
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      className={`${base} ${variants[variant]} ${className}`}
+      style={styles[variant]}
+    >
+      {children}
+    </button>
   );
 }
 
-/* ══════════════════════════════════════════════════════════
-   SCREEN 4 — COACH (3 tình huống cụ thể)
-══════════════════════════════════════════════════════════ */
-const COACH_MODES = [
-  {
-    id: "distracted",
-    icon: "🌀",
-    title: "Tôi bị phân tâm",
-    sub: "Đang làm rồi mất tập trung — cần reset",
-    color: C.amber,
-    bg: "#1A1408",
-    border: C.amberLo,
-  },
-  {
-    id: "overwhelmed",
-    icon: "🌊",
-    title: "Tôi bị overwhelmed",
-    sub: "Quá nhiều thứ cùng lúc — tê liệt",
-    color: C.blue,
-    bg: C.blueLo,
-    border: C.blue + "33",
-  },
-  {
-    id: "lost",
-    icon: "🔍",
-    title: "Không biết đi đúng hướng không",
-    sub: "Làm mà không chắc có ý nghĩa không",
-    color: C.green,
-    bg: C.greenLo,
-    border: C.green + "33",
-  },
-];
-
-const COACH_PROMPTS = {
-  distracted: (context) => `Người dùng đang bị phân tâm giữa chừng. Việc đang làm: "${context}".
-Hãy:
-1. Xác nhận cảm giác — không phán xét
-2. Hỏi 1 câu duy nhất để giúp họ nhớ lại việc đang làm
-3. Đề xuất 1 kỹ thuật reset trong 2 phút`,
-
-  overwhelmed: (context) => `Người dùng đang overwhelmed (quá tải — tê liệt không hành động được). Họ mô tả: "${context}".
-Hãy:
-1. Xác nhận — không thuyết giảng
-2. Chia nhỏ thành 1 bước 5 phút ngay lập tức
-3. Nói rõ: chỉ làm bước đó thôi, không cần nghĩ xa hơn`,
-
-  lost: (context) => `Người dùng không chắc đang đi đúng hướng. Họ đang làm: "${context}".
-North Star của họ: "${LS.get("north_star", "chưa xác định")}".
-Hãy:
-1. So sánh việc đang làm với North Star
-2. Xác nhận nếu đúng hướng, hoặc gợi ý điều chỉnh nhỏ nếu lệch
-3. Kết thúc bằng 1 câu xác nhận cụ thể`,
-};
-
-function CoachScreen({ profile }) {
-  const [mode, setMode] = useState(null);
-  const [input, setInput] = useState("");
-  const [reply, setReply] = useState("");
-  const [loading, setLoading] = useState(false);
-  const taRef = useRef();
-
-  useEffect(() => { if (mode && !reply) taRef.current?.focus(); }, [mode]);
-
-  const ask = async () => {
-    if (!input.trim()) return;
-    setLoading(true);
-    try {
-      const promptFn = COACH_PROMPTS[mode];
-      const sys = buildSystemPrompt(profile) + "\n\n" + promptFn(input);
-      const r = await askClaude(sys, [{ role: "user", content: input }], 350);
-      setReply(r);
-    } catch (e) { setReply("Lỗi kết nối AI: " + e.message); }
-    setLoading(false);
-  };
-
-  const reset = () => { setMode(null); setInput(""); setReply(""); };
-
-  const modeInfo = COACH_MODES.find(m => m.id === mode);
-
+function Card({ children, className = "", glow = false }) {
   return (
-    <Screen scrollable>
-      <div className="fu" style={{ marginBottom: "24px" }}>
-        <h2 style={{ ...serif, color: C.text, fontSize: "24px", marginBottom: "6px" }}>AI Coach</h2>
-        <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.6 }}>
-          Không phải chatbot. Đây là hệ thống dẫn quyết định<br />
-          cho 3 tình huống bị kẹt phổ biến nhất.
-        </p>
-      </div>
-
-      {!mode && (
-        <>
-          {COACH_MODES.map((m, i) => (
-            <button key={m.id} onClick={() => setMode(m.id)}
-              className={`fu d${i + 1}`}
-              style={{
-                width: "100%", background: m.bg, border: `1.5px solid ${m.border}`,
-                borderRadius: "16px", padding: "20px", marginBottom: "10px",
-                display: "flex", alignItems: "center", gap: "16px", textAlign: "left",
-              }}>
-              <span style={{ fontSize: "28px", flexShrink: 0 }}>{m.icon}</span>
-              <div>
-                <p style={{ color: C.text, fontSize: "16px", fontWeight: 700, marginBottom: "4px" }}>{m.title}</p>
-                <p style={{ color: C.textMid, fontSize: "13px", lineHeight: 1.5 }}>{m.sub}</p>
-              </div>
-              <span style={{ color: C.textDim, marginLeft: "auto", fontSize: "20px" }}>›</span>
-            </button>
-          ))}
-
-          <Divider />
-          <div className="fu d4">
-            {["Bạn không cần giải quyết mọi thứ hôm nay.", "Chỉ cần biết 1 bước tiếp theo.", "Làm ít nhưng đúng."].map((t, i) => (
-              <p key={i} style={{ color: C.textDim, fontSize: "13px", textAlign: "center", lineHeight: 1.7 }}>— {t}</p>
-            ))}
-          </div>
-        </>
-      )}
-
-      {mode && (
-        <div key={mode} className="fu">
-          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px" }}>
-            <button onClick={reset} style={{ background: "transparent", color: C.textMid, fontSize: "20px", padding: "4px 8px" }}>←</button>
-            <h3 style={{ ...serif, color: C.text, fontSize: "20px" }}>{modeInfo?.title}</h3>
-          </div>
-
-          {!reply && !loading && (
-            <Card style={{ marginBottom: "14px" }}>
-              <Tag style={{ marginBottom: "12px", display: "block" }}>
-                {mode === "distracted" ? "Bạn đang làm việc gì khi bị phân tâm?" :
-                 mode === "overwhelmed" ? "Mô tả những thứ đang chồng chất trong đầu bạn:" :
-                 "Bạn đang làm gì và điều gì khiến bạn nghi ngờ?"}
-              </Tag>
-              <textarea ref={taRef} value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && input.trim()) { e.preventDefault(); ask(); } }}
-                placeholder="Viết thật lòng — càng cụ thể càng tốt..."
-                rows={4}
-                style={{
-                  width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
-                  borderRadius: "12px", padding: "14px 16px", color: C.text, fontSize: "15px",
-                  lineHeight: 1.7, marginBottom: "14px",
-                }} />
-              <div style={{ display: "flex", gap: "10px" }}>
-                <Btn v="ghost" onClick={reset} style={{ flex: 1 }}>Hủy</Btn>
-                <Btn onClick={ask} disabled={!input.trim()} style={{ flex: 2 }}>
-                  Hỏi Coach →
-                </Btn>
-              </div>
-            </Card>
-          )}
-
-          {loading && <Loading text="Coach đang phân tích..." />}
-
-          {reply && (
-            <div key="reply" className="fu">
-              <Card style={{ marginBottom: "14px", border: `1px solid ${modeInfo?.border}`, background: modeInfo?.bg }}>
-                <Tag color={modeInfo?.color} style={{ marginBottom: "12px", display: "block" }}>
-                  Coach trả lời
-                </Tag>
-                <p style={{ color: C.text, fontSize: "15px", lineHeight: 1.85, whiteSpace: "pre-wrap" }}>{reply}</p>
-              </Card>
-              <div style={{ display: "flex", gap: "10px" }}>
-                <Btn v="ghost" onClick={reset} style={{ flex: 1 }}>Quay lại</Btn>
-                <Btn onClick={() => { setInput(""); setReply(""); }} style={{ flex: 1 }}>
-                  Hỏi lại
-                </Btn>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </Screen>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   SCREEN 5 — EVIDENCE (Nhật ký bằng chứng)
-══════════════════════════════════════════════════════════ */
-function EvidenceScreen({ wins, profile }) {
-  const today   = new Date().toLocaleDateString("vi-VN");
-  const todayW  = wins.filter(w => w.date === today);
-  const pastW   = wins.filter(w => w.date !== today);
-  const totalDays = new Set(wins.map(w => w.date)).size;
-
-  return (
-    <Screen scrollable>
-      <div className="fu" style={{ marginBottom: "20px" }}>
-        <h2 style={{ ...serif, color: C.text, fontSize: "24px", marginBottom: "6px" }}>Bằng chứng tiến bộ</h2>
-        <p style={{ color: C.textMid, fontSize: "14px", lineHeight: 1.6 }}>
-          Não ADHD hay quên đi những gì đã làm được.<br />
-          Đây là bằng chứng để nhắc lại.
-        </p>
-      </div>
-
-      {/* Stats */}
-      <div className="fu d1" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "20px" }}>
-        {[
-          { n: wins.length, label: "Tổng wins", color: C.amber },
-          { n: totalDays,   label: "Ngày có win", color: C.green },
-          { n: wins.filter(w => {
-            const d = new Date(); d.setDate(d.getDate() - 7);
-            return new Date(w.date.split("/").reverse().join("-")) >= d;
-          }).length, label: "7 ngày qua", color: C.blue },
-        ].map((s, i) => (
-          <Card key={i} style={{ textAlign: "center", padding: "16px 8px" }}>
-            <div style={{ ...mono, fontSize: "28px", color: s.color, fontWeight: 500, lineHeight: 1 }}>{s.n}</div>
-            <Tag style={{ marginTop: "6px", fontSize: "9px" }}>{s.label}</Tag>
-          </Card>
-        ))}
-      </div>
-
-      {/* Core Identity reminder */}
-      {profile.coreIdentity && (
-        <Card className="fu d2" glow style={{ marginBottom: "16px", border: `1px solid ${C.amberLo}` }}>
-          <Tag color={C.amberLo} style={{ marginBottom: "8px", display: "block" }}>✦ Core Identity của bạn</Tag>
-          <p style={{ color: C.amberHi, fontSize: "15px", lineHeight: 1.7, ...serif, fontStyle: "italic" }}>
-            "{profile.coreIdentity}"
-          </p>
-        </Card>
-      )}
-
-      {/* Wins */}
-      {todayW.length > 0 && (
-        <div className="fu d3">
-          <Tag style={{ marginBottom: "10px", display: "block" }}>Hôm nay</Tag>
-          {todayW.map((w, i) => <WinCard key={i} w={w} hi />)}
-          <Divider />
-        </div>
-      )}
-
-      {pastW.length > 0 && (
-        <div className="fu d4">
-          <Tag style={{ marginBottom: "10px", display: "block" }}>Lịch sử</Tag>
-          {pastW.slice(0, 20).map((w, i) => <WinCard key={i} w={w} />)}
-        </div>
-      )}
-
-      {wins.length === 0 && (
-        <Card className="fu d3" style={{ textAlign: "center", padding: "40px 20px" }}>
-          <p style={{ color: C.textMid, fontSize: "15px", lineHeight: 1.7, marginBottom: "8px" }}>Chưa có win nào.</p>
-          <p style={{ color: C.textDim, fontSize: "13px" }}>
-            Hoàn thành việc trong tab Hôm nay → win tự động được ghi lại.
-          </p>
-        </Card>
-      )}
-    </Screen>
-  );
-}
-
-function WinCard({ w, hi = false }) {
-  const e = EL.find(x => x.v === w.energy);
-  return (
-    <div style={{
-      background: hi ? C.greenLo : C.surface,
-      border: `1px solid ${hi ? C.green + "33" : C.border}`,
-      borderRadius: "14px", padding: "14px 16px", marginBottom: "8px",
-    }}>
-      <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
-        <span style={{ fontSize: "16px" }}>{e?.e || "✅"}</span>
-        <div style={{ flex: 1 }}>
-          <p style={{ color: C.text, fontSize: "14px", lineHeight: 1.6 }}>{w.task}</p>
-          {w.steps && (
-            <div style={{ marginTop: "8px" }}>
-              {w.steps.map((s, i) => (
-                <p key={i} style={{ color: C.textDim, fontSize: "12px", lineHeight: 1.5 }}>✓ {s}</p>
-              ))}
-            </div>
-          )}
-          <p style={{ color: C.textDim, fontSize: "11px", marginTop: "6px", ...mono }}>{w.date}</p>
-        </div>
-        <span style={{ color: C.green, fontSize: "14px" }}>✓</span>
-      </div>
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   SCREEN WRAPPERS
-══════════════════════════════════════════════════════════ */
-function Screen({ children, center = false, scrollable = false }) {
-  return (
-    <div style={{
-      height: "calc(100dvh - 58px)", overflowY: scrollable ? "auto" : "hidden",
-      display: "flex", flexDirection: center ? undefined : "column",
-      alignItems: center ? "center" : undefined,
-      justifyContent: center ? "center" : undefined,
-      padding: "20px 16px", maxWidth: "480px", margin: "0 auto",
-    }}>
+    <div
+      className={`rounded-2xl border p-5 ${className}`}
+      style={{
+        background: C.surface,
+        borderColor: C.border,
+        boxShadow: glow ? `0 0 30px ${C.amber}22` : "none",
+      }}
+    >
       {children}
     </div>
   );
 }
 
-/* ══════════════════════════════════════════════════════════
-   NAVIGATION
-══════════════════════════════════════════════════════════ */
-const TABS = [
-  { id: "reflect",  icon: "🪞", label: "Phản Tư"   },
-  { id: "compass",  icon: "🧭", label: "Hướng Đi"  },
-  { id: "today",    icon: "⚡",  label: "Hôm Nay"   },
-  { id: "coach",    icon: "🧠", label: "Coach"     },
-  { id: "evidence", icon: "✦",  label: "Tiến Bộ"  },
+function Input({ label, value, onChange, placeholder, type = "text", className = "" }) {
+  return (
+    <div className={`space-y-1.5 ${className}`}>
+      {label && <label className="text-xs font-medium" style={{ color: C.soft }}>{label}</label>}
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-xl px-4 py-2.5 text-sm outline-none transition-all"
+        style={{
+          background: C.elevated,
+          border: `1px solid ${C.border}`,
+          color: C.text,
+        }}
+        onFocus={e => e.target.style.borderColor = C.amber}
+        onBlur={e => e.target.style.borderColor = C.border}
+      />
+    </div>
+  );
+}
+
+function Textarea({ label, value, onChange, placeholder, rows = 3, className = "" }) {
+  return (
+    <div className={`space-y-1.5 ${className}`}>
+      {label && <label className="text-xs font-medium" style={{ color: C.soft }}>{label}</label>}
+      <textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        className="w-full rounded-xl px-4 py-2.5 text-sm outline-none transition-all resize-none"
+        style={{
+          background: C.elevated,
+          border: `1px solid ${C.border}`,
+          color: C.text,
+        }}
+        onFocus={e => e.target.style.borderColor = C.amber}
+        onBlur={e => e.target.style.borderColor = C.border}
+      />
+    </div>
+  );
+}
+
+function SliderInput({ label, value, onChange, min = 1, max = 10 }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between items-center">
+        <span className="text-xs" style={{ color: C.soft }}>{label}</span>
+        <span className="text-sm font-bold" style={{ color: C.amber }}>{value}<span className="text-xs font-normal opacity-60">/{max}</span></span>
+      </div>
+      <input
+        type="range" min={min} max={max} value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+        style={{ accentColor: C.amber, background: `linear-gradient(to right, ${C.amber} ${(value-min)/(max-min)*100}%, ${C.border} 0%)` }}
+      />
+    </div>
+  );
+}
+
+function ProgressBar({ value, max = 100, color = C.amber }) {
+  const pct = Math.min(100, (value / max) * 100);
+  return (
+    <div className="w-full rounded-full overflow-hidden" style={{ background: C.border, height: 4 }}>
+      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
+    </div>
+  );
+}
+
+function Chip({ children, active = false, color = C.amber }) {
+  return (
+    <span
+      className="inline-block px-3 py-1 rounded-full text-xs font-medium transition-all"
+      style={{
+        background: active ? `${color}22` : C.elevated,
+        color: active ? color : C.soft,
+        border: `1px solid ${active ? `${color}44` : C.border}`,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Spinner({ size = 16 }) {
+  return <Loader2 size={size} className="animate-spin" style={{ color: C.amber }} />;
+}
+
+function Section({ title, icon: Icon, children, action }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {Icon && <Icon size={14} style={{ color: C.amber }} />}
+          <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: C.soft }}>{title}</span>
+        </div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function NudgeBox({ text, loading = false }) {
+  return (
+    <div className="rounded-xl px-4 py-3 flex items-start gap-3" style={{ background: `${C.amber}11`, border: `1px solid ${C.amber}33` }}>
+      <Sparkles size={14} className="mt-0.5 shrink-0" style={{ color: C.amber }} />
+      {loading
+        ? <div className="flex items-center gap-2"><Spinner size={12} /><span className="text-xs" style={{ color: C.soft }}>AI đang phân tích...</span></div>
+        : <p className="text-sm leading-relaxed" style={{ color: C.soft }}>{text}</p>
+      }
+    </div>
+  );
+}
+
+function TaskCard({ task, index, onChange }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border transition-all" style={{ background: C.elevated, borderColor: task.done ? `${C.green}44` : C.border }}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <button
+          onClick={() => onChange({ ...task, done: !task.done })}
+          className="shrink-0 rounded-full transition-all"
+          style={{ color: task.done ? C.green : C.muted }}
+        >
+          {task.done ? <CheckCircle2 size={20} /> : <Circle size={20} />}
+        </button>
+        <div className="flex-1 min-w-0">
+          {task.title
+            ? <p className={`text-sm font-medium truncate ${task.done ? "line-through opacity-50" : ""}`} style={{ color: C.text }}>{task.title}</p>
+            : <p className="text-sm" style={{ color: C.muted }}>Việc {index + 1} — chưa đặt tên</p>
+          }
+          {task.minutes > 0 && <p className="text-xs mt-0.5" style={{ color: C.muted }}>{task.minutes} phút{task.goal ? ` · ${task.goal}` : ""}</p>}
+        </div>
+        <button onClick={() => setOpen(!open)} className="p-1 rounded-lg hover:bg-white/5">
+          <ChevronRight size={14} style={{ color: C.muted, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.2s" }} />
+        </button>
+      </div>
+
+      {open && (
+        <div className="px-4 pb-4 pt-1 space-y-3 border-t" style={{ borderColor: C.border }}>
+          <Input label="Tên việc" value={task.title} onChange={v => onChange({ ...task, title: v })} placeholder="Ví dụ: Viết outline bài TikTok" />
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Mục tiêu đạt được" value={task.goal} onChange={v => onChange({ ...task, goal: v })} placeholder="Hoàn thành script..." />
+            <Input label="Thời gian (phút)" value={task.minutes} onChange={v => onChange({ ...task, minutes: Number(v) })} type="number" placeholder="25" />
+          </div>
+          <Input label="Minimum version (nếu quá tải)" value={task.minimum} onChange={v => onChange({ ...task, minimum: v })} placeholder="Ví dụ: Chỉ cần viết tiêu đề..." />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── WELCOME SCREEN ───────────────────────────────────────────
+function WelcomeScreen({ data, update }) {
+  const ready = data.user.name.trim() && data.user.disclaimerAccepted;
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12" style={{ background: C.bg }}>
+      {/* Ambient glow */}
+      <div className="fixed inset-0 pointer-events-none" style={{
+        background: `radial-gradient(ellipse 60% 40% at 50% 0%, ${C.amber}0A 0%, transparent 70%)`
+      }} />
+
+      <div className="w-full max-w-md space-y-8 relative">
+        {/* Logo */}
+        <div className="text-center space-y-3">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-2" style={{ background: `${C.amber}18`, border: `1px solid ${C.amber}44` }}>
+            <Brain size={32} style={{ color: C.amber }} />
+          </div>
+          <h1 className="text-4xl font-black tracking-tight" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>ADHD OS</h1>
+          <p className="text-sm leading-relaxed" style={{ color: C.soft }}>
+            Từ mơ hồ sang vận hành được cuộc sống từng ngày.<br />
+            Không phải todo app. Đây là hệ điều hành hành vi cá nhân.
+          </p>
+        </div>
+
+        {/* Form */}
+        <Card>
+          <div className="space-y-4">
+            <Input
+              label="Tên của bạn"
+              value={data.user.name}
+              onChange={v => update(d => ({ ...d, user: { ...d.user, name: v } }))}
+              placeholder="Ví dụ: Hoàng"
+            />
+
+            <button
+              onClick={() => update(d => ({ ...d, user: { ...d.user, disclaimerAccepted: !d.user.disclaimerAccepted } }))}
+              className="flex items-start gap-3 w-full text-left rounded-xl p-3 transition-all hover:bg-white/5"
+            >
+              <div className="mt-0.5 w-5 h-5 rounded-md border shrink-0 flex items-center justify-center transition-all" style={{
+                background: data.user.disclaimerAccepted ? C.amber : "transparent",
+                borderColor: data.user.disclaimerAccepted ? C.amber : C.border,
+              }}>
+                {data.user.disclaimerAccepted && <Check size={12} color="#000" strokeWidth={3} />}
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: C.soft }}>
+                Tôi hiểu đây là công cụ tự phản tư và vận hành cá nhân, không thay thế bác sĩ hoặc chuyên gia tâm lý.
+              </p>
+            </button>
+          </div>
+
+          <div className="mt-5">
+            <Btn
+              onClick={() => update(d => ({ ...d, ui: { screen: "onboarding" } }))}
+              disabled={!ready}
+              className="w-full"
+            >
+              Bắt đầu Onboarding <ArrowRight size={16} />
+            </Btn>
+          </div>
+        </Card>
+
+        {/* What this does */}
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { icon: Eye,     label: "Hiểu bản thân", desc: "Điểm mạnh, trigger, pattern" },
+            { icon: Compass, label: "North Star", desc: "Ikigai + hướng 1 năm" },
+            { icon: CalendarDays, label: "Planner hằng ngày", desc: "Top 3 + AI bẻ nhỏ" },
+            { icon: Brain,   label: "AI Coach", desc: "Nhớ bạn, phản biện thật" },
+          ].map(({ icon: Icon, label, desc }) => (
+            <div key={label} className="rounded-xl p-3 space-y-1" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+              <Icon size={14} style={{ color: C.amber }} />
+              <p className="text-xs font-semibold" style={{ color: C.text }}>{label}</p>
+              <p className="text-xs" style={{ color: C.muted }}>{desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ONBOARDING ───────────────────────────────────────────────
+// 3 phases. Each phase = array of steps.
+// SPRINT 2: Move AI calls to server-side onboarding API route
+
+const P1_STEPS = [
+  "Ảnh chụp nhanh",
+  "Vùng mạnh",
+  "Trigger & tự phá",
+  "To-do / Not-to-do / To-be",
 ];
 
-function Nav({ active, set, profile }) {
+const P2_STEPS = [
+  "Ý nghĩa sâu",
+  "Giá trị & kỹ năng",
+  "Tương lai",
+];
+
+const P3_STEPS = [
+  "Bản đồ năng lượng",
+  "Cách làm việc",
+];
+
+function OnboardingScreen({ data, update, onComplete }) {
+  const { phase, step } = data.onboarding;
+  const [loading, setLoading] = useState(false);
+
+  const pSteps = phase === 1 ? P1_STEPS : phase === 2 ? P2_STEPS : P3_STEPS;
+  const totalSteps = pSteps.length;
+  const progress = ((step + 1) / totalSteps) * 100;
+
+  const setPhase = (p) => update(d => ({ ...d, onboarding: { ...d.onboarding, phase: p, step: 0 } }));
+  const nextStep = () => update(d => ({ ...d, onboarding: { ...d.onboarding, step: d.onboarding.step + 1 } }));
+  const prevStep = () => {
+    if (step > 0) update(d => ({ ...d, onboarding: { ...d.onboarding, step: d.onboarding.step - 1 } }));
+    else if (phase > 1) update(d => ({ ...d, onboarding: { ...d.onboarding, phase: d.onboarding.phase - 1, step: 0 } }));
+  };
+
+  const updateP1 = (patch) => update(d => ({ ...d, p1: { ...d.p1, ...patch } }));
+  const updateP2 = (patch) => update(d => ({ ...d, p2: { ...d.p2, ...patch } }));
+  const updateP3 = (patch) => update(d => ({ ...d, p3: { ...d.p3, ...patch } }));
+
+  const handlePhaseComplete = async (phaseNum) => {
+    setLoading(true);
+    if (phaseNum === 1) {
+      const sa = await generateSelfAwareness(data.p1);
+      update(d => ({ ...d, selfAwareness: sa }));
+      setPhase(2);
+    } else if (phaseNum === 2) {
+      const ik = await generateIkigai(data.p1, data.p2, data.selfAwareness);
+      update(d => ({ ...d, ikigai: ik }));
+      setPhase(3);
+    } else {
+      const rt = await generateRoutines(data.p1, data.p3, data.selfAwareness);
+      update(d => ({ ...d, routines: rt, onboarding: { ...d.onboarding, completed: true }, ui: { screen: "onboarding-result" } }));
+    }
+    setLoading(false);
+  };
+
+  const isLastStep = step === totalSteps - 1;
+
   return (
-    <nav style={{
-      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
-      width: "100%", maxWidth: "480px",
-      background: C.surface + "F8", backdropFilter: "blur(16px)",
-      borderTop: `1px solid ${C.border}`,
-      display: "flex", paddingBottom: "env(safe-area-inset-bottom)", zIndex: 20,
-    }}>
-      {TABS.map(t => {
-        const isActive = active === t.id;
-        const isDone = (t.id === "reflect" && profile?.reflectDone) || (t.id === "compass" && profile?.compassDone);
-        return (
-          <button key={t.id} onClick={() => set(t.id)} style={{
-            flex: 1, padding: "10px 2px 12px", background: "transparent",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
-          }}>
-            <span style={{ fontSize: "18px", opacity: isActive ? 1 : 0.3, transition: "all .2s", position: "relative" }}>
-              {t.icon}
-              {isDone && <span style={{ position: "absolute", top: "-2px", right: "-4px", fontSize: "8px" }}>✓</span>}
-            </span>
-            <span style={{
-              color: isActive ? C.amber : C.textDim, fontSize: "9px", ...mono,
-              letterSpacing: "0.5px", transition: "all .2s",
-            }}>
-              {t.label}
-            </span>
+    <div className="min-h-screen flex flex-col" style={{ background: C.bg }}>
+      <div className="fixed inset-0 pointer-events-none" style={{
+        background: `radial-gradient(ellipse 50% 30% at 50% 0%, ${C.blue}08 0%, transparent 60%)`
+      }} />
+
+      {/* Header */}
+      <div className="px-6 pt-8 pb-4 max-w-2xl mx-auto w-full">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <Brain size={18} style={{ color: C.amber }} />
+            <span className="text-sm font-bold" style={{ color: C.amber, fontFamily: "'Syne', sans-serif" }}>ADHD OS</span>
+          </div>
+          <div className="flex gap-2">
+            {[1, 2, 3].map(p => (
+              <div key={p} className="flex items-center gap-1.5">
+                <div className="rounded-full text-xs font-bold px-2.5 py-0.5 transition-all"
+                  style={{
+                    background: phase === p ? C.amber : phase > p ? `${C.green}22` : C.elevated,
+                    color: phase === p ? "#000" : phase > p ? C.green : C.muted,
+                    border: `1px solid ${phase === p ? C.amber : phase > p ? `${C.green}44` : C.border}`,
+                  }}>
+                  {phase > p ? <Check size={10} /> : `P${p}`}
+                </div>
+                {p < 3 && <div className="w-4 h-px" style={{ background: phase > p ? C.green : C.border }} />}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Phase label */}
+        <div className="mb-3">
+          <p className="text-xs uppercase tracking-widest mb-1" style={{ color: C.soft }}>
+            Phase {phase} — {phase === 1 ? "Self-Awareness" : phase === 2 ? "Ikigai & North Star" : "Routine Setup"}
+          </p>
+          <h2 className="text-xl font-bold" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>
+            {pSteps[step]}
+          </h2>
+        </div>
+
+        <ProgressBar value={progress} />
+        <p className="text-xs mt-1.5" style={{ color: C.muted }}>Bước {step + 1} / {totalSteps}</p>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 px-6 max-w-2xl mx-auto w-full">
+        <Card>
+          {/* PHASE 1 */}
+          {phase === 1 && step === 0 && (
+            <div className="space-y-4">
+              <p className="text-sm" style={{ color: C.soft }}>Bắt đầu bằng vài câu hỏi thực tế. Trả lời thẳng, không cần viết đẹp.</p>
+              <div className="space-y-2">
+                <label className="text-xs font-medium" style={{ color: C.soft }}>Trạng thái ADHD của bạn</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {["diagnosed", "suspected", "self-identified"].map(v => (
+                    <button key={v} onClick={() => updateP1({ adhdStatus: v })}
+                      className="rounded-xl py-2.5 text-xs font-medium border transition-all"
+                      style={{
+                        background: data.p1.adhdStatus === v ? `${C.amber}22` : C.elevated,
+                        borderColor: data.p1.adhdStatus === v ? C.amber : C.border,
+                        color: data.p1.adhdStatus === v ? C.amber : C.soft,
+                      }}>
+                      {v === "diagnosed" ? "Đã chẩn đoán" : v === "suspected" ? "Nghi ngờ" : "Tự xác định"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {["Nỗi đau lớn nhất #1", "Nỗi đau lớn nhất #2", "Nỗi đau lớn nhất #3"].map((label, i) => (
+                <Input key={i} label={label}
+                  value={data.p1.pains[i]}
+                  onChange={v => { const p = [...data.p1.pains]; p[i] = v; updateP1({ pains: p }); }}
+                  placeholder={["Khó bắt đầu việc", "Time blindness", "Planner fail liên tục"][i]}
+                />
+              ))}
+            </div>
+          )}
+
+          {phase === 1 && step === 1 && (
+            <div className="space-y-4">
+              <NudgeBox text="Điền vào những khoảng trống này. Không cần nghe hay — hãy trung thực." />
+              <Textarea label="Bạn làm gì thấy tự nhiên, ít kháng cự?" value={data.p1.strengths}
+                onChange={v => updateP1({ strengths: v })}
+                placeholder="Ví dụ: brainstorm ý tưởng, kết nối người với nhau, bắt đầu dự án mới..." rows={3} />
+              <Textarea label="Điều gì cho bạn dopamine lành mạnh (flow state)?" value={data.p1.triggers}
+                onChange={v => updateP1({ triggers: v })}
+                placeholder="Ví dụ: viết nội dung có deadline gấp, giúp người khác giải vấn đề..." rows={2} />
+            </div>
+          )}
+
+          {phase === 1 && step === 2 && (
+            <div className="space-y-4">
+              <NudgeBox text="Phần này quan trọng nhất. AI sẽ dùng dữ liệu này để tìm pattern thật của bạn." />
+              <Textarea label="Kiểu tự phá nhịp lặp đi lặp lại của bạn là gì?" value={data.p1.sabotage}
+                onChange={v => updateP1({ sabotage: v })}
+                placeholder="Ví dụ: bắt đầu tốt rồi bỏ giữa chừng, thêm task mới khi cũ chưa xong..." rows={3} />
+            </div>
+          )}
+
+          {phase === 1 && step === 3 && (
+            <div className="space-y-4">
+              <p className="text-sm" style={{ color: C.soft }}>Mỗi dòng = 1 item. Viết thẳng, không suy nghĩ quá nhiều.</p>
+              <Textarea label="To-do — Việc bạn nên làm nhiều hơn" value={data.p1.toDo}
+                onChange={v => updateP1({ toDo: v })}
+                placeholder="Mỗi dòng 1 việc..." rows={3} />
+              <Textarea label="Not-to-do — Việc bạn cần dừng" value={data.p1.notToDo}
+                onChange={v => updateP1({ notToDo: v })}
+                placeholder="Mỗi dòng 1 việc..." rows={3} />
+              <Textarea label="To-be — Kiểu người bạn muốn trở thành" value={data.p1.toBe}
+                onChange={v => updateP1({ toBe: v })}
+                placeholder="Mỗi dòng 1 phẩm chất..." rows={3} />
+            </div>
+          )}
+
+          {/* PHASE 2 */}
+          {phase === 2 && step === 0 && (
+            <div className="space-y-4">
+              <NudgeBox text="Phần này tìm động lực sâu — không phải mục tiêu bề mặt. Đừng cố nghe hay." />
+              <Textarea label="Điều gì làm bạn thấy đời có ý nghĩa?" value={data.p2.meaning}
+                onChange={v => updateP2({ meaning: v })}
+                placeholder="Khi nào bạn thấy mình đang sống đúng nhất..." rows={3} />
+              <Textarea label="Vấn đề nào bạn cứ đau đáu — của bản thân hoặc người khác?" value={data.p2.problem}
+                onChange={v => updateP2({ problem: v })}
+                placeholder="Điều nào khiến bạn tức hoặc muốn giải quyết khi thấy nó..." rows={3} />
+            </div>
+          )}
+
+          {phase === 2 && step === 1 && (
+            <div className="space-y-4">
+              <Textarea label="Người khác thường nhờ bạn giúp điều gì?" value={data.p2.valueToOthers}
+                onChange={v => updateP2({ valueToOthers: v })}
+                placeholder="Những gì họ thấy ở bạn mà bạn đôi khi không để ý..." rows={3} />
+              <Textarea label="Kỹ năng / kinh nghiệm bạn đang có" value={data.p2.skills}
+                onChange={v => updateP2({ skills: v })}
+                placeholder="Không cần hoàn hảo — liệt kê thật, kể cả kỹ năng mềm..." rows={3} />
+            </div>
+          )}
+
+          {phase === 2 && step === 2 && (
+            <div className="space-y-4">
+              <Textarea label="Bạn muốn trở thành ai trong 1-3 năm tới?" value={data.p2.futureSelf}
+                onChange={v => updateP2({ futureSelf: v })}
+                placeholder="Mô tả cụ thể — không chỉ nghề nghiệp, mà cả lifestyle và cảm giác bạn muốn có..." rows={4} />
+            </div>
+          )}
+
+          {/* PHASE 3 */}
+          {phase === 3 && step === 0 && (
+            <div className="space-y-4">
+              <NudgeBox text="AI sẽ dùng thông tin này để xây routine thực dùng được — không phải routine lý tưởng." />
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Giờ dậy" value={data.p3.wakeTime} onChange={v => updateP3({ wakeTime: v })} type="time" />
+                <Input label="Giờ ngủ" value={data.p3.sleepTime} onChange={v => updateP3({ sleepTime: v })} type="time" />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-2" style={{ color: C.soft }}>Khung giờ năng lượng cao nhất</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {["morning", "afternoon", "evening"].map(t => (
+                    <button key={t} onClick={() => updateP3({ peakTime: t })}
+                      className="rounded-xl py-2.5 text-xs font-medium border transition-all"
+                      style={{
+                        background: data.p3.peakTime === t ? `${C.amber}22` : C.elevated,
+                        borderColor: data.p3.peakTime === t ? C.amber : C.border,
+                        color: data.p3.peakTime === t ? C.amber : C.soft,
+                      }}>
+                      {t === "morning" ? "Sáng" : t === "afternoon" ? "Chiều" : "Tối"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {phase === 3 && step === 1 && (
+            <div className="space-y-4">
+              <Textarea label="Việc cố định trong ngày (giờ học, làm, đưa con...)" value={data.p3.fixedWork}
+                onChange={v => updateP3({ fixedWork: v })}
+                placeholder="Ví dụ: 8-12h làm việc, 17h đón con, 19-21h coi con học..." rows={3} />
+              <Textarea label="Thói quen tập luyện hiện tại" value={data.p3.exercise}
+                onChange={v => updateP3({ exercise: v })}
+                placeholder="Ví dụ: chạy 30 phút mỗi sáng, hoặc chưa có thói quen gì..." rows={2} />
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Navigation */}
+      <div className="px-6 py-6 max-w-2xl mx-auto w-full">
+        <div className="flex items-center justify-between">
+          <Btn variant="ghost" onClick={prevStep} disabled={phase === 1 && step === 0}>
+            <ChevronLeft size={16} /> Quay lại
+          </Btn>
+
+          {isLastStep ? (
+            <Btn onClick={() => handlePhaseComplete(phase)} disabled={loading}>
+              {loading
+                ? <><Spinner size={14} /> AI đang xây hệ vận hành...</>
+                : phase < 3
+                  ? <>Phase {phase + 1} <ChevronRight size={16} /></>
+                  : <>Tạo ADHD OS của tôi <Sparkles size={16} /></>
+              }
+            </Btn>
+          ) : (
+            <Btn onClick={nextStep}>
+              Tiếp theo <ChevronRight size={16} />
+            </Btn>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ONBOARDING RESULT ────────────────────────────────────────
+function OnboardingResultScreen({ data, update }) {
+  const { selfAwareness: sa, ikigai, routines } = data;
+
+  return (
+    <div className="min-h-screen" style={{ background: C.bg }}>
+      <div className="fixed inset-0 pointer-events-none" style={{
+        background: `radial-gradient(ellipse 60% 50% at 50% 0%, ${C.amber}0A 0%, transparent 60%)`
+      }} />
+      <div className="max-w-2xl mx-auto px-6 py-10 space-y-6 relative">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-2" style={{ background: `${C.green}18`, border: `1px solid ${C.green}44` }}>
+            <Sparkles size={28} style={{ color: C.green }} />
+          </div>
+          <h1 className="text-3xl font-black" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>ADHD OS của bạn đã sẵn sàng</h1>
+          <p className="text-sm" style={{ color: C.soft }}>AI đã phân tích và xây hệ vận hành ban đầu. Đây là giả thuyết — không phải chân lý cuối cùng.</p>
+        </div>
+
+        {/* Self-awareness */}
+        {sa && (
+          <Card>
+            <Section title="Self-Awareness" icon={Eye}>
+              <p className="text-sm leading-relaxed mb-4" style={{ color: C.soft }}>{sa.summary}</p>
+              <div className="grid grid-cols-2 gap-3">
+                {sa.strengths?.length > 0 && (
+                  <div>
+                    <p className="text-xs mb-2 font-semibold" style={{ color: C.green }}>Điểm mạnh</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {sa.strengths.map((s, i) => <Chip key={i} active color={C.green}>{s}</Chip>)}
+                    </div>
+                  </div>
+                )}
+                {sa.triggers?.length > 0 && (
+                  <div>
+                    <p className="text-xs mb-2 font-semibold" style={{ color: C.red }}>Trigger chính</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {sa.triggers.map((t, i) => <Chip key={i} active color={C.red}>{t}</Chip>)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Section>
+          </Card>
+        )}
+
+        {/* North Star */}
+        {ikigai && (
+          <Card glow>
+            <Section title="North Star" icon={Compass}>
+              <div className="space-y-3">
+                {ikigai.manifesto && (
+                  <p className="text-base font-semibold leading-relaxed italic" style={{ color: C.amber }}>
+                    "{ikigai.manifesto}"
+                  </p>
+                )}
+                {ikigai.northStar && (
+                  <p className="text-sm" style={{ color: C.soft }}>{ikigai.northStar}</p>
+                )}
+              </div>
+            </Section>
+          </Card>
+        )}
+
+        {/* Routine preview */}
+        {routines && (
+          <Card>
+            <Section title="Routine buổi sáng" icon={Sun}>
+              <div className="space-y-2">
+                {routines.morning?.slice(0, 3).map((r, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: C.elevated }}>
+                    <span className="text-sm" style={{ color: C.text }}>{r.title}</span>
+                    <span className="text-xs" style={{ color: C.muted }}>{r.minutes}'</span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          </Card>
+        )}
+
+        <Btn
+          onClick={() => update(d => ({ ...d, ui: { screen: "home" } }))}
+          className="w-full"
+        >
+          Vào ADHD OS <ArrowRight size={16} />
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─── HOME SCREEN ──────────────────────────────────────────────
+function HomeScreen({ data, update, setScreen }) {
+  const { ikigai, selfAwareness: sa, today, gamification, routines } = data;
+  const doneTasks = today.tasks.filter(t => t.done).length;
+  const taskPct = (doneTasks / 3) * 100;
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-widest mb-1" style={{ color: C.muted }}>Chào buổi sáng,</p>
+          <h1 className="text-2xl font-black" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>
+            {data.user.name || "Bạn"} 👋
+          </h1>
+        </div>
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+          <Flame size={14} style={{ color: C.amber }} />
+          <span className="text-sm font-bold" style={{ color: C.amber }}>{gamification.streak}</span>
+          <span className="text-xs" style={{ color: C.muted }}>ngày</span>
+        </div>
+      </div>
+
+      {/* North Star card */}
+      {ikigai ? (
+        <Card glow>
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Compass size={14} style={{ color: C.amber }} />
+              <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.amber }}>North Star</span>
+            </div>
+            <button onClick={() => setScreen("north-star")} className="text-xs" style={{ color: C.muted }}>
+              Chi tiết →
+            </button>
+          </div>
+          <p className="text-sm leading-relaxed" style={{ color: C.soft }}>{ikigai.northStar}</p>
+          {ikigai.manifesto && (
+            <p className="text-xs mt-3 italic" style={{ color: C.amberDim }}>"{ikigai.manifesto}"</p>
+          )}
+        </Card>
+      ) : (
+        <div className="rounded-2xl border-2 border-dashed p-5 text-center" style={{ borderColor: C.border }}>
+          <p className="text-sm" style={{ color: C.muted }}>Hoàn thành onboarding để xem North Star</p>
+        </div>
+      )}
+
+      {/* Today tasks */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Target size={14} style={{ color: C.amber }} />
+            <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.soft }}>Top 3 hôm nay</span>
+          </div>
+          <button onClick={() => setScreen("today")} className="text-xs" style={{ color: C.amber }}>
+            Mở Planner →
           </button>
-        );
-      })}
+        </div>
+
+        <div className="space-y-2 mb-4">
+          {today.tasks.map((task, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ background: C.elevated }}>
+              <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{
+                background: task.done ? `${C.green}22` : `${C.amber}22`,
+                border: `1px solid ${task.done ? C.green : C.amber}44`,
+              }}>
+                {task.done
+                  ? <Check size={10} style={{ color: C.green }} />
+                  : <span className="text-xs font-bold" style={{ color: C.amber }}>{i + 1}</span>
+                }
+              </div>
+              <span className={`text-sm flex-1 truncate ${task.done ? "line-through opacity-40" : ""}`} style={{ color: C.text }}>
+                {task.title || `Việc ${i + 1} — chưa đặt`}
+              </span>
+              {task.minutes > 0 && <span className="text-xs shrink-0" style={{ color: C.muted }}>{task.minutes}'</span>}
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-xs" style={{ color: C.muted }}>
+            <span>Tiến độ hôm nay</span>
+            <span>{doneTasks}/3</span>
+          </div>
+          <ProgressBar value={taskPct} color={doneTasks === 3 ? C.green : C.amber} />
+        </div>
+      </Card>
+
+      {/* AI Nudge */}
+      {today.aiNudge && (
+        <NudgeBox text={today.aiNudge} />
+      )}
+
+      {/* Routine + Consistency */}
+      <div className="grid grid-cols-2 gap-4">
+        <Card>
+          <Section title="Routine sáng" icon={Sun}>
+            <div className="space-y-1.5 mt-2">
+              {(routines?.morning || []).slice(0, 3).map((r, i) => (
+                <div key={i} className="text-xs rounded-lg px-2.5 py-1.5" style={{ background: C.elevated, color: C.soft }}>
+                  {r.title} · {r.minutes}'
+                </div>
+              ))}
+              {!routines && <p className="text-xs" style={{ color: C.muted }}>Hoàn thành onboarding để xem routine</p>}
+            </div>
+          </Section>
+        </Card>
+
+        <Card>
+          <Section title="Consistency" icon={Flame}>
+            <div className="mt-2 space-y-2">
+              <div className="text-center">
+                <span className="text-3xl font-black" style={{ color: C.amber, fontFamily: "'Syne', sans-serif" }}>
+                  {gamification.score}
+                </span>
+                <span className="text-xs ml-1" style={{ color: C.muted }}>/100</span>
+              </div>
+              <ProgressBar value={gamification.score} color={gamification.score >= 70 ? C.green : C.amber} />
+              {gamification.badges.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {gamification.badges.map(b => <Chip key={b} active>{b}</Chip>)}
+                </div>
+              )}
+            </div>
+          </Section>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── TODAY SCREEN ─────────────────────────────────────────────
+function TodayScreen({ data, update }) {
+  const { today, selfAwareness: sa, ikigai } = data;
+  const [tab, setTab] = useState("morning");
+  const [loadingNudge, setLoadingNudge] = useState(false);
+  const [loadingEvening, setLoadingEvening] = useState(false);
+
+  const updateToday = (patch) => update(d => ({ ...d, today: { ...d.today, ...patch } }));
+  const updateEvening = (patch) => update(d => ({
+    ...d, today: { ...d.today, evening: { ...d.today.evening, ...patch } }
+  }));
+
+  const handleMorningDone = async () => {
+    setLoadingNudge(true);
+    updateToday({ morningDone: true });
+    const nudge = await generateMorningNudge(today, ikigai, sa);
+    updateToday({ aiNudge: nudge });
+    setLoadingNudge(false);
+    setTab("tasks");
+  };
+
+  const handleEveningDone = async () => {
+    setLoadingEvening(true);
+    const summary = await generateEveningSummary(today, sa, ikigai);
+    updateEvening({ aiSummary: summary, done: true });
+    // Update gamification
+    const doneTasks = today.tasks.filter(t => t.done).length;
+    const newScore = Math.min(100, doneTasks * 30 + (today.gratitude.filter(Boolean).length * 3) + 5);
+    update(d => ({
+      ...d,
+      gamification: {
+        ...d.gamification,
+        score: newScore,
+        streak: doneTasks > 0 ? d.gamification.streak + 1 : d.gamification.streak,
+        badges: newScore >= 80 ? [...new Set([...d.gamification.badges, "Giữ nhịp tốt"])] : d.gamification.badges,
+        lastDate: new Date().toISOString().slice(0, 10),
+      }
+    }));
+    setLoadingEvening(false);
+  };
+
+  const TABS = [
+    { key: "morning", label: "Sáng", icon: Sun },
+    { key: "tasks", label: "Tasks", icon: Target },
+    { key: "evening", label: "Tối", icon: Moon },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-2xl font-black mb-1" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>Hôm nay</h1>
+        <p className="text-xs" style={{ color: C.muted }}>{new Date().toLocaleDateString("vi-VN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 rounded-xl p-1" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button key={key} onClick={() => setTab(key)}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all"
+            style={{
+              background: tab === key ? C.amber : "transparent",
+              color: tab === key ? "#000" : C.soft,
+            }}>
+            <Icon size={12} />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Morning Tab */}
+      {tab === "morning" && (
+        <div className="space-y-4">
+          <Card>
+            <Section title="3 điều biết ơn" icon={Heart}>
+              <div className="space-y-2 mt-2">
+                {today.gratitude.map((g, i) => (
+                  <Input key={i} value={g}
+                    onChange={v => { const grat = [...today.gratitude]; grat[i] = v; updateToday({ gratitude: grat }); }}
+                    placeholder={`Điều ${i + 1} bạn biết ơn hôm nay...`}
+                  />
+                ))}
+              </div>
+            </Section>
+          </Card>
+
+          <Card>
+            <Section title="Trạng thái buổi sáng" icon={Zap}>
+              <div className="space-y-4 mt-3">
+                <SliderInput label="Mức năng lượng" value={today.energy} onChange={v => updateToday({ energy: v })} />
+                <SliderInput label="Mức tập trung" value={today.focus} onChange={v => updateToday({ focus: v })} />
+                <Input label="Cảm xúc bạn muốn có hôm nay" value={today.desiredFeeling}
+                  onChange={v => updateToday({ desiredFeeling: v })}
+                  placeholder="Ví dụ: Bình tĩnh và rõ ràng" />
+              </div>
+            </Section>
+          </Card>
+
+          <Btn onClick={handleMorningDone} disabled={loadingNudge} className="w-full">
+            {loadingNudge ? <><Spinner size={14} /> AI đang tạo nudge...</> : <>Xong morning check-in · Qua Tasks <ArrowRight size={16} /></>}
+          </Btn>
+
+          {today.aiNudge && <NudgeBox text={today.aiNudge} />}
+        </div>
+      )}
+
+      {/* Tasks Tab */}
+      {tab === "tasks" && (
+        <div className="space-y-4">
+          {!today.morningDone && (
+            <NudgeBox text="Hoàn thành Morning Check-in trước để AI tạo nudge cho kế hoạch hôm nay." />
+          )}
+
+          <Card>
+            <Section title="Top 3 việc hôm nay" icon={Target}>
+              <div className="space-y-3 mt-3">
+                {today.tasks.map((task, i) => (
+                  <TaskCard key={task.id} task={task} index={i}
+                    onChange={updated => {
+                      const tasks = [...today.tasks];
+                      tasks[i] = updated;
+                      updateToday({ tasks });
+                    }}
+                  />
+                ))}
+              </div>
+            </Section>
+          </Card>
+
+          {today.aiNudge && <NudgeBox text={today.aiNudge} />}
+
+          <Card>
+            <Section title="Focus Mode" icon={Zap}>
+              <div className="space-y-2 mt-2">
+                <div className="rounded-xl px-3 py-2.5 text-sm" style={{ background: C.elevated, color: C.soft }}>
+                  Bắt đầu bằng việc số 1. Không mở task mới cho đến khi xong.
+                </div>
+                <div className="rounded-xl px-3 py-2.5 text-sm" style={{ background: C.elevated, color: C.soft }}>
+                  Nếu khựng → giảm xuống minimum version ngay, đừng né hoàn toàn.
+                </div>
+                {/* SPRINT 4: Add Pomodoro timer here */}
+              </div>
+            </Section>
+          </Card>
+        </div>
+      )}
+
+      {/* Evening Tab */}
+      {tab === "evening" && (
+        <div className="space-y-4">
+          <Card>
+            <Section title="Check-out buổi tối" icon={Moon}>
+              <div className="space-y-3 mt-3">
+                <Textarea label="Hôm nay làm được gì?" value={today.evening.wins}
+                  onChange={v => updateEvening({ wins: v })}
+                  placeholder="Liệt kê thực tế — dù nhỏ cũng tính..." rows={2} />
+                <Textarea label="Điều gì làm trật nhịp?" value={today.evening.offTrack}
+                  onChange={v => updateEvening({ offTrack: v })}
+                  placeholder="Không phán xét — chỉ ghi lại thật..." rows={2} />
+                <Textarea label="Brain dump" value={today.evening.brainDump}
+                  onChange={v => updateEvening({ brainDump: v })}
+                  placeholder="Xả hết những gì còn trong đầu..." rows={3} />
+                <Textarea label="Chuẩn bị gì cho ngày mai?" value={today.evening.tomorrowPrep}
+                  onChange={v => updateEvening({ tomorrowPrep: v })}
+                  placeholder="1-2 điều cần chuẩn bị..." rows={2} />
+              </div>
+            </Section>
+          </Card>
+
+          {today.evening.done && today.evening.aiSummary && (
+            <NudgeBox text={today.evening.aiSummary} />
+          )}
+
+          {!today.evening.done && (
+            <Btn onClick={handleEveningDone} disabled={loadingEvening} className="w-full">
+              {loadingEvening ? <><Spinner size={14} /> AI đang tổng kết ngày...</> : <>Kết thúc ngày <Moon size={16} /></>}
+            </Btn>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NORTH STAR SCREEN ────────────────────────────────────────
+function NorthStarScreen({ data, update }) {
+  const { ikigai, selfAwareness: sa } = data;
+
+  if (!ikigai) {
+    return (
+      <div className="space-y-5">
+        <h1 className="text-2xl font-black" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>North Star</h1>
+        <Card>
+          <div className="text-center py-8 space-y-3">
+            <Compass size={40} style={{ color: C.muted }} />
+            <p className="text-sm" style={{ color: C.muted }}>Hoàn thành onboarding để AI tạo North Star cá nhân của bạn.</p>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-black" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>North Star</h1>
+
+      {/* Manifesto */}
+      <Card glow>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Compass size={14} style={{ color: C.amber }} />
+            <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.amber }}>Tuyên ngôn cá nhân</span>
+          </div>
+          <p className="text-xl font-bold leading-relaxed italic" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>
+            "{ikigai.manifesto}"
+          </p>
+        </div>
+      </Card>
+
+      {/* North Star */}
+      <Card>
+        <Section title="North Star 1 năm" icon={Star}>
+          <p className="text-sm leading-relaxed mt-2" style={{ color: C.soft }}>{ikigai.northStar}</p>
+        </Section>
+      </Card>
+
+      {/* Ikigai recommendation */}
+      <Card>
+        <Section title="Ikigai khuyến nghị" icon={Sparkles}>
+          <div className="mt-2 space-y-2">
+            <p className="text-base font-bold" style={{ color: C.text }}>{ikigai.recommendation}</p>
+            <p className="text-sm" style={{ color: C.soft }}>{ikigai.whyRecommended}</p>
+          </div>
+        </Section>
+      </Card>
+
+      {/* 3 Hypotheses */}
+      <div className="space-y-3">
+        <p className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.soft }}>3 Giả thuyết Ikigai</p>
+        {ikigai.hypotheses?.map((h, i) => (
+          <Card key={i}>
+            <div className="space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-bold" style={{ color: i === 0 && h.title === ikigai.recommendation ? C.amber : C.text }}>{h.title}</p>
+                {h.title === ikigai.recommendation && <Chip active>Khuyến nghị</Chip>}
+              </div>
+              <p className="text-xs" style={{ color: C.soft }}>{h.fit}</p>
+              <div className="flex items-start gap-2 rounded-lg px-2.5 py-2" style={{ background: C.elevated }}>
+                <AlertTriangle size={11} className="mt-0.5 shrink-0" style={{ color: C.red }} />
+                <p className="text-xs" style={{ color: C.muted }}>Rủi ro: {h.risk}</p>
+              </div>
+              <div className="flex items-start gap-2 rounded-lg px-2.5 py-2" style={{ background: `${C.green}0A` }}>
+                <Zap size={11} className="mt-0.5 shrink-0" style={{ color: C.green }} />
+                <p className="text-xs" style={{ color: C.soft }}>Test: {h.test}</p>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* 90-day plan */}
+      {ikigai.plan90d?.length > 0 && (
+        <Card>
+          <Section title="Hướng 90 ngày" icon={TrendingUp}>
+            <div className="space-y-2 mt-2">
+              {ikigai.plan90d.map((item, i) => (
+                <div key={i} className="flex items-start gap-3 rounded-xl px-3 py-2.5" style={{ background: C.elevated }}>
+                  <span className="text-xs font-bold mt-0.5 shrink-0" style={{ color: C.amber }}>{i + 1}</span>
+                  <p className="text-sm" style={{ color: C.soft }}>{item}</p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        </Card>
+      )}
+
+      {/* Stop doing */}
+      {ikigai.stopDoing?.length > 0 && (
+        <Card>
+          <Section title="Cần dừng lại" icon={X}>
+            <div className="space-y-2 mt-2">
+              {ikigai.stopDoing.map((item, i) => (
+                <div key={i} className="flex items-start gap-3 rounded-xl px-3 py-2.5" style={{ background: `${C.red}08` }}>
+                  <Minus size={12} className="mt-0.5 shrink-0" style={{ color: C.red }} />
+                  <p className="text-sm" style={{ color: C.soft }}>{item}</p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        </Card>
+      )}
+
+      {/* Self-awareness summary */}
+      {sa && (
+        <Card>
+          <Section title="Chân dung hành vi" icon={Brain}>
+            <p className="text-sm leading-relaxed mt-2" style={{ color: C.soft }}>{sa.summary}</p>
+            {sa.toDo?.length > 0 && (
+              <div className="mt-3 grid grid-cols-1 gap-1.5">
+                <p className="text-xs font-semibold" style={{ color: C.green }}>To-do list</p>
+                {sa.toDo.map((t, i) => <Chip key={i} active color={C.green}>{t}</Chip>)}
+              </div>
+            )}
+          </Section>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ─── REVIEW SCREEN ────────────────────────────────────────────
+function ReviewScreen({ data, update }) {
+  const { weekly, today, selfAwareness: sa, ikigai, gamification } = data;
+  const [loading, setLoading] = useState(false);
+
+  const handleGenerateWeekly = async () => {
+    setLoading(true);
+    const result = await generateWeeklyReview(today, sa, ikigai, gamification);
+    if (result) {
+      update(d => ({ ...d, weekly: { ...result, generated: true } }));
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-black" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>Review</h1>
+
+      {/* Consistency card */}
+      <Card>
+        <Section title="Consistency Score" icon={BarChart2}>
+          <div className="mt-3 space-y-3">
+            <div className="flex items-end gap-3">
+              <span className="text-4xl font-black" style={{ color: C.amber, fontFamily: "'Syne', sans-serif" }}>{gamification.score}</span>
+              <span className="text-sm mb-1" style={{ color: C.muted }}>/100</span>
+            </div>
+            <ProgressBar value={gamification.score} color={gamification.score >= 70 ? C.green : C.amber} />
+            <div className="flex gap-4 text-xs" style={{ color: C.soft }}>
+              <span>Streak: <strong style={{ color: C.amber }}>{gamification.streak} ngày</strong></span>
+              <span>Task hoàn thành: <strong style={{ color: C.amber }}>{today.tasks.filter(t => t.done).length}/3</strong></span>
+            </div>
+            {gamification.badges.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {gamification.badges.map(b => (
+                  <div key={b} className="flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold"
+                    style={{ background: `${C.amber}22`, color: C.amber, border: `1px solid ${C.amber}44` }}>
+                    <Award size={11} /> {b}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Section>
+      </Card>
+
+      {/* Evening summary */}
+      {today.evening.done && today.evening.aiSummary && (
+        <Card>
+          <Section title="AI tổng kết hôm nay" icon={Sparkles}>
+            <p className="text-sm leading-relaxed mt-2" style={{ color: C.soft }}>{today.evening.aiSummary}</p>
+          </Section>
+        </Card>
+      )}
+
+      {/* Weekly Review */}
+      <Card>
+        <Section title="Weekly Review" icon={TrendingUp}
+          action={
+            <Btn small variant="outline" onClick={handleGenerateWeekly} disabled={loading}>
+              {loading ? <Spinner size={12} /> : <><RefreshCw size={11} /> Phân tích tuần</>}
+            </Btn>
+          }
+        >
+          {weekly.generated ? (
+            <div className="space-y-3 mt-3">
+              {[
+                { label: "Wins", text: weekly.wins, color: C.green },
+                { label: "Misses", text: weekly.misses, color: C.red },
+                { label: "Pattern", text: weekly.patterns, color: C.blue },
+                { label: "Tuần tới", text: weekly.adjustments, color: C.amber },
+              ].map(({ label, text, color }) => (
+                <div key={label} className="rounded-xl px-3 py-3" style={{ background: C.elevated }}>
+                  <p className="text-xs font-bold mb-1.5" style={{ color }}>{label}</p>
+                  <p className="text-sm" style={{ color: C.soft }}>{text}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6">
+              <p className="text-sm mb-3" style={{ color: C.muted }}>
+                Nhấn "Phân tích tuần" để AI review pattern 7 ngày của bạn.
+              </p>
+            </div>
+          )}
+        </Section>
+      </Card>
+
+      {/* Routine adherence */}
+      {data.routines && (
+        <Card>
+          <Section title="Routine minimum version" icon={Moon}>
+            <div className="space-y-2 mt-2">
+              {data.routines.minimum?.map((r, i) => (
+                <div key={i} className="flex items-center justify-between rounded-xl px-3 py-2.5" style={{ background: C.elevated }}>
+                  <div>
+                    <p className="text-xs font-medium" style={{ color: C.text }}>{r.title}</p>
+                    <p className="text-xs" style={{ color: C.muted }}>{r.purpose}</p>
+                  </div>
+                  <span className="text-xs" style={{ color: C.soft }}>{r.minutes}'</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ─── COACH SCREEN ─────────────────────────────────────────────
+function CoachScreen({ data, update }) {
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+
+  const SHORTCUTS = [
+    "Sửa kế hoạch hôm nay",
+    "Tôi đang lệch hướng",
+    "Giúp tôi hiểu pattern của mình",
+    "Review tuần này",
+  ];
+
+  const sendMessage = useCallback(async (msg) => {
+    if (!msg.trim() || loading) return;
+    const userMsg = { role: "user", content: msg };
+    update(d => ({ ...d, chat: [...d.chat, userMsg] }));
+    setInput("");
+    setLoading(true);
+
+    const reply = await generateCoachReply(msg, data);
+    const assistantMsg = { role: "assistant", content: reply };
+    update(d => ({ ...d, chat: [...d.chat, assistantMsg] }));
+    setLoading(false);
+  }, [data, loading, update]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [data.chat]);
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-180px)]">
+      <h1 className="text-2xl font-black mb-4" style={{ color: C.text, fontFamily: "'Syne', sans-serif" }}>AI Coach</h1>
+
+      {/* Context panel */}
+      {data.selfAwareness && (
+        <div className="flex gap-2 flex-wrap mb-4">
+          {[
+            { label: `Streak: ${data.gamification.streak}d`, color: C.amber },
+            { label: `Tasks: ${data.today.tasks.filter(t => t.done).length}/3`, color: data.today.tasks.filter(t=>t.done).length === 3 ? C.green : C.soft },
+            { label: `Energy: ${data.today.energy}/10`, color: C.blue },
+          ].map(({ label, color }) => (
+            <span key={label} className="text-xs rounded-full px-2.5 py-1 font-medium"
+              style={{ background: C.surface, border: `1px solid ${C.border}`, color }}>
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Shortcuts */}
+      <div className="flex gap-2 flex-wrap mb-4">
+        {SHORTCUTS.map(q => (
+          <button key={q} onClick={() => sendMessage(q)}
+            className="text-xs rounded-full px-3 py-1.5 transition-all hover:opacity-90"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.soft }}>
+            {q}
+          </button>
+        ))}
+      </div>
+
+      {/* Chat */}
+      <div className="flex-1 overflow-y-auto space-y-3 pr-1" style={{ scrollbarWidth: "thin" }}>
+        {data.chat.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div
+              className="max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed"
+              style={{
+                background: msg.role === "user" ? C.amber : C.surface,
+                color: msg.role === "user" ? "#000" : C.soft,
+                border: msg.role === "assistant" ? `1px solid ${C.border}` : "none",
+                borderTopRightRadius: msg.role === "user" ? 4 : undefined,
+                borderTopLeftRadius: msg.role === "assistant" ? 4 : undefined,
+              }}
+            >
+              {msg.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="rounded-2xl px-4 py-3 flex items-center gap-2"
+              style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+              <Spinner size={14} />
+              <span className="text-xs" style={{ color: C.soft }}>Coach đang suy nghĩ...</span>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <div className="mt-4 flex gap-2" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage(input)}
+          placeholder="Hỏi Coach bất cứ điều gì..."
+          className="flex-1 rounded-xl px-4 py-3 text-sm outline-none transition-all"
+          style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
+          onFocus={e => e.target.style.borderColor = C.amber}
+          onBlur={e => e.target.style.borderColor = C.border}
+        />
+        <button
+          onClick={() => sendMessage(input)}
+          disabled={!input.trim() || loading}
+          className="rounded-xl px-4 transition-all"
+          style={{
+            background: input.trim() && !loading ? C.amber : C.elevated,
+            color: input.trim() && !loading ? "#000" : C.muted,
+          }}
+        >
+          <Send size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── NAV BAR ──────────────────────────────────────────────────
+function NavBar({ screen, setScreen }) {
+  const ITEMS = [
+    { key: "home",       label: "Home",      icon: Home },
+    { key: "today",      label: "Today",     icon: CalendarDays },
+    { key: "north-star", label: "North Star",icon: Compass },
+    { key: "review",     label: "Review",    icon: BarChart2 },
+    { key: "coach",      label: "Coach",     icon: MessageCircle },
+  ];
+
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 z-20 px-4 pb-4 pt-2"
+      style={{ background: `${C.bg}EE`, backdropFilter: "blur(20px)", borderTop: `1px solid ${C.border}` }}>
+      <div className="max-w-2xl mx-auto grid grid-cols-5 gap-1">
+        {ITEMS.map(({ key, label, icon: Icon }) => {
+          const active = screen === key;
+          return (
+            <button key={key} onClick={() => setScreen(key)}
+              className="flex flex-col items-center gap-1 py-2 px-1 rounded-xl transition-all"
+              style={{ color: active ? C.amber : C.muted, background: active ? `${C.amber}12` : "transparent" }}>
+              <Icon size={18} />
+              <span className="text-xs font-medium">{label}</span>
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }
 
-/* ══════════════════════════════════════════════════════════
-   ROOT APP
-══════════════════════════════════════════════════════════ */
-export default function App() {
-  const [profile, setProfile] = useState(() => LS.get("adhd_profile", null));
-  const [tab,     setTab]     = useState("reflect");
-  const [wins,    setWins]    = useState(() => LS.get("adhd_wins", []));
+// ─── APP SHELL ────────────────────────────────────────────────
+export default function ADHDOSApp() {
+  const [data, setData] = useState(DEFAULT);
 
-  const handleReflectDone = (updatedProfile, northStarHint) => {
-    const p = { ...updatedProfile, northStarHint };
-    setProfile(p); LS.set("adhd_profile", p);
-    setTab("compass");
-  };
+  // Font injection
+  useEffect(() => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap";
+    document.head.appendChild(link);
+    const style = document.createElement("style");
+    style.textContent = `
+      body { background: ${C.bg}; color: ${C.text}; font-family: 'DM Sans', sans-serif; }
+      input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: ${C.amber}; cursor: pointer; }
+      input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: ${C.amber}; cursor: pointer; border: none; }
+      * { box-sizing: border-box; }
+      ::-webkit-scrollbar { width: 4px; }
+      ::-webkit-scrollbar-track { background: ${C.bg}; }
+      ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }
+    `;
+    document.head.appendChild(style);
+  }, []);
 
-  const handleCompassDone = (updatedProfile) => {
-    setProfile(updatedProfile); LS.set("adhd_profile", updatedProfile);
-    setTab("today");
-  };
+  // Load from storage
+  useEffect(() => {
+    const saved = load();
+    if (saved) setData(prev => ({ ...prev, ...saved }));
+  }, []);
 
-  const addWin = (win) => {
-    const updated = [win, ...wins];
-    setWins(updated); LS.set("adhd_wins", updated);
+  // Save on change
+  useEffect(() => { save(data); }, [data]);
+
+  // Update helper (supports patch object or updater function)
+  const update = useCallback((patchOrFn) => {
+    setData(prev => {
+      const next = typeof patchOrFn === "function" ? patchOrFn(prev) : { ...prev, ...patchOrFn };
+      return next;
+    });
+  }, []);
+
+  const setScreen = useCallback((screen) => {
+    update(d => ({ ...d, ui: { screen } }));
+  }, [update]);
+
+  const { screen } = data.ui;
+
+  // Route: pre-onboarding
+  if (screen === "welcome") return <WelcomeScreen data={data} update={update} />;
+  if (screen === "onboarding") return <OnboardingScreen data={data} update={update} />;
+  if (screen === "onboarding-result") return <OnboardingResultScreen data={data} update={update} />;
+
+  // Route: main app
+  const SCREENS = {
+    home:        <HomeScreen      data={data} update={update} setScreen={setScreen} />,
+    today:       <TodayScreen     data={data} update={update} />,
+    "north-star":<NorthStarScreen data={data} update={update} />,
+    review:      <ReviewScreen    data={data} update={update} />,
+    coach:       <CoachScreen     data={data} update={update} />,
   };
 
   return (
-    <>
-      <GS />
-
-      {/* Header */}
-      <header style={{
-        position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)",
-        width: "100%", maxWidth: "480px", zIndex: 10,
-        background: C.bg + "F0", backdropFilter: "blur(16px)",
-        borderBottom: `1px solid ${C.border}`,
-        padding: "12px 18px",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div style={{
-            width: "28px", height: "28px", borderRadius: "8px",
-            background: `linear-gradient(135deg, ${C.amber}, ${C.amberLo})`,
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px",
-          }}>🧠</div>
-          <span style={{ ...serif, color: C.text, fontSize: "16px", fontWeight: 600 }}>ADHD OS</span>
-        </div>
-        {profile?.name && (
-          <span style={{ color: C.textDim, fontSize: "11px", ...mono }}>{profile.name}</span>
-        )}
-      </header>
-
-      {/* Main content */}
-      <div style={{ paddingTop: "56px" }}>
-        {tab === "reflect"  && <ReflectScreen  profile={profile || {}} onComplete={handleReflectDone} />}
-        {tab === "compass"  && <CompassScreen  profile={profile || {}} onComplete={handleCompassDone} />}
-        {tab === "today"    && <TodayScreen    profile={profile || {}} onWin={addWin} />}
-        {tab === "coach"    && <CoachScreen    profile={profile || {}} />}
-        {tab === "evidence" && <EvidenceScreen wins={wins} profile={profile || {}} />}
-      </div>
-
-      <Nav active={tab} set={setTab} profile={profile} />
-    </>
+    <div className="min-h-screen" style={{ background: C.bg }}>
+      <div className="fixed inset-0 pointer-events-none" style={{
+        background: `radial-gradient(ellipse 40% 30% at 50% 0%, ${C.amber}06 0%, transparent 50%)`
+      }} />
+      <main className="max-w-2xl mx-auto px-4 pt-8 pb-32 relative">
+        {SCREENS[screen] || SCREENS["home"]}
+      </main>
+      <NavBar screen={screen} setScreen={setScreen} />
+    </div>
   );
 }
