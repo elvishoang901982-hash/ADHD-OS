@@ -9,13 +9,52 @@
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  Brain, Sun, Moon, Compass, Target, Flame, MessageCircle,
-  TrendingUp, ChevronRight, ChevronLeft, Check, Loader2,
-  Sparkles, Home, CalendarDays, Star, Zap, Eye, Heart,
-  RefreshCw, Send, Award, AlertTriangle, BarChart2, Clock,
-  CheckCircle2, Circle, ArrowRight, Minus, Plus, X
-} from "lucide-react";
+
+// ─── INLINE ICONS (no external dependency) ────────────────────
+// Each icon is a tiny SVG component matching the lucide-react API:
+//   <IconName size={N} style={...} className="..." />
+function Ic({ d, size = 16, style, className = "", strokeWidth = 2, fill = "none" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}
+      stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round"
+      strokeLinejoin="round" style={style} className={className}>
+      {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
+    </svg>
+  );
+}
+function Brain({ size, style, className })       { return <Ic size={size} style={style} className={className} d={["M9.5 2a2.5 2.5 0 0 1 5 0","M9.5 2C6 2 3 5 3 8.5c0 2.5 1.5 4.5 3.5 5.5V20a2 2 0 0 0 4 0v-1h1v1a2 2 0 0 0 4 0v-6c2-1 3.5-3 3.5-5.5C19 5 16 2 12.5 2"]} />; }
+function Sun({ size, style, className })         { return <Ic size={size} style={style} className={className} d={["M12 3v1","M12 20v1","M4.22 4.22l.7.7","M19.07 19.07l.7.7","M3 12h1","M20 12h1","M4.22 19.78l.7-.7","M19.07 4.93l.7-.7","M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"]} />; }
+function Moon({ size, style, className })        { return <Ic size={size} style={style} className={className} d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />; }
+function Compass({ size, style, className })     { return <Ic size={size} style={style} className={className} d={["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z","m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z"]} />; }
+function Target({ size, style, className })      { return <Ic size={size} style={style} className={className} d={["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z","M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z","M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"]} />; }
+function Flame({ size, style, className })       { return <Ic size={size} style={style} className={className} d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />; }
+function MessageCircle({ size, style, className }) { return <Ic size={size} style={style} className={className} d="M7.9 20A9 9 0 1 0 4 16.1L2 22z" />; }
+function TrendingUp({ size, style, className })  { return <Ic size={size} style={style} className={className} d={["M22 7 13.5 15.5 8.5 10.5 2 17","m16 7 6 0 0 6"]} />; }
+function ChevronRight({ size, style, className }) { return <Ic size={size} style={style} className={className} d="m9 18 6-6-6-6" />; }
+function ChevronLeft({ size, style, className }) { return <Ic size={size} style={style} className={className} d="m15 18-6-6 6-6" />; }
+function Check({ size, style, className, color, strokeWidth }) { return <Ic size={size} style={{ ...style, color }} className={className} strokeWidth={strokeWidth || 2} d="M20 6 9 17l-5-5" />; }
+function Loader2({ size, style, className })     { return <Ic size={size} style={style} className={className} d="M21 12a9 9 0 1 1-6.219-8.56" />; }
+function Sparkles({ size, style, className })    { return <Ic size={size} style={style} className={className} d={["m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3z","M5 3v4","M19 17v4","M3 5h4","M17 19h4"]} />; }
+function Home({ size, style, className })        { return <Ic size={size} style={style} className={className} d={["m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z","M9 22V12h6v10"]} />; }
+function CalendarDays({ size, style, className }) { return <Ic size={size} style={style} className={className} d={["M8 2v4","M16 2v4","M3 10h18","M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z","M8 14h.01","M12 14h.01","M16 14h.01","M8 18h.01","M12 18h.01","M16 18h.01"]} />; }
+function Star({ size, style, className })        { return <Ic size={size} style={style} className={className} d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />; }
+function Zap({ size, style, className })         { return <Ic size={size} style={style} className={className} d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />; }
+function Eye({ size, style, className })         { return <Ic size={size} style={style} className={className} d={["M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z","M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"]} />; }
+function Heart({ size, style, className })       { return <Ic size={size} style={style} className={className} d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />; }
+function RefreshCw({ size, style, className })   { return <Ic size={size} style={style} className={className} d={["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8","M21 3v5h-5","M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16","M8 16H3v5"]} />; }
+function Send({ size, style, className })        { return <Ic size={size} style={style} className={className} d={["m22 2-7 20-4-9-9-4 20-7z","M22 2 11 13"]} />; }
+function Award({ size, style, className })       { return <Ic size={size} style={style} className={className} d={["M12 15a7 7 0 1 0 0-14 7 7 0 0 0 0 14z","M8.21 13.89 7 23l5-3 5 3-1.21-9.12"]} />; }
+function AlertTriangle({ size, style, className }) { return <Ic size={size} style={style} className={className} d={["m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z","M12 9v4","M12 17h.01"]} />; }
+function BarChart2({ size, style, className })   { return <Ic size={size} style={style} className={className} d={["M18 20V10","M12 20V4","M6 20v-6"]} />; }
+function CheckCircle2({ size, style, className }) { return <Ic size={size} style={style} className={className} d={["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z","m9 12 2 2 4-4"]} />; }
+function Circle({ size, style, className })      { return <Ic size={size} style={style} className={className} d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" />; }
+function ArrowRight({ size, style, className })  { return <Ic size={size} style={style} className={className} d={["M5 12h14","m12 5 7 7-7 7"]} />; }
+function Minus({ size, style, className })       { return <Ic size={size} style={style} className={className} d="M5 12h14" />; }
+function Plus({ size, style, className })        { return <Ic size={size} style={style} className={className} d={["M5 12h14","M12 5v14"]} />; }
+function X({ size, style, className })           { return <Ic size={size} style={style} className={className} d={["M18 6 6 18","m6 6 12 12"]} />; }
+// Clock kept for future use
+// eslint-disable-next-line no-unused-vars
+function Clock({ size, style, className })       { return <Ic size={size} style={style} className={className} d={["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z","M12 6v6l4 2"]} />; }
 
 // ─── CONSTANTS ────────────────────────────────────────────────
 const STORAGE_KEY = "adhd-os-v1";
